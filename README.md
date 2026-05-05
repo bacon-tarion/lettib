@@ -1,3 +1,0 @@
-# lettib
-
-Initializing repository...
