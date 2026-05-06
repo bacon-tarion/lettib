@@ -1,120 +1,284 @@
-"use client";
-
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { mockUsage } from "@/lib/mockData";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { getUserUsageSummary } from "@/lib/usage/queries";
+import { getModelDisplayName, getProviderLabel } from "@/lib/providers/models";
 
-const pctChange = Math.round(
-  ((mockUsage.month_usd - mockUsage.month_last_usd) / mockUsage.month_last_usd) * 100
-);
+export const dynamic = "force-dynamic";
 
-const MOCK_PROVIDER_TABLE = [
-  { provider: "Anthropic", model: "claude-opus-4-7", month_usd: 2.80, tokens_in: "820K", tokens_out: "310K", error_rate: "0.1%" },
-  { provider: "Anthropic", model: "claude-sonnet-4-6", month_usd: 1.30, tokens_in: "480K", tokens_out: "190K", error_rate: "0.0%" },
-  { provider: "OpenAI", model: "gpt-5.4", month_usd: 2.80, tokens_in: "650K", tokens_out: "280K", error_rate: "0.2%" },
-  { provider: "Google", model: "gemini-3.1-pro", month_usd: 0.95, tokens_in: "430K", tokens_out: "170K", error_rate: "0.0%" },
-  { provider: "xAI", model: "grok-4.1", month_usd: 0.36, tokens_in: "190K", tokens_out: "80K", error_rate: "0.0%" },
-];
+const PROVIDER_BG: Record<string, string> = {
+  openai: "bg-blue-500",
+  anthropic: "bg-amber-500",
+  google: "bg-green-500",
+  xai: "bg-purple-500",
+  custom: "bg-gray-500",
+  unknown: "bg-zinc-400",
+};
 
-export default function UsagePage() {
+const ACTION_LABEL: Record<string, string> = {
+  chat: "Chat",
+  compare: "Compare",
+  synthesis: "Synthesis",
+  memory_extraction: "Memory extraction",
+  unknown: "Other",
+};
+
+function fmtNumber(n: number) {
+  return n.toLocaleString();
+}
+function fmtMoney(n: number, digits = 2) {
+  return `$${n.toFixed(digits)}`;
+}
+function fmtDay(iso: string) {
+  const [, m, d] = iso.split("-");
+  return `${m}/${d}`;
+}
+
+export default async function UsagePage() {
+  const sb = await createClient();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  const summary = await getUserUsageSummary();
+  if (!summary) redirect("/login");
+
+  const maxProviderCost = Math.max(
+    0.0001,
+    ...summary.by_provider.map((p) => p.cost_usd)
+  );
+  const maxDayCost = Math.max(0.0001, ...summary.by_day.map((d) => d.cost_usd));
+  const hasAny = summary.total_cost_usd > 0 || summary.total_tokens > 0;
+
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div className="flex items-center gap-6 flex-wrap">
-        <div>
-          <p className="text-xs text-muted-foreground">Today</p>
-          <p className="text-2xl font-bold">${mockUsage.today_usd.toFixed(2)}</p>
-        </div>
-        <div className="h-8 w-px bg-border hidden sm:block" />
-        <div>
-          <p className="text-xs text-muted-foreground">This Month</p>
-          <p className="text-2xl font-bold">${mockUsage.month_usd.toFixed(2)}</p>
-        </div>
-        <div className="h-8 w-px bg-border hidden sm:block" />
-        <div>
-          <p className="text-xs text-muted-foreground">vs Last Month</p>
-          <p className={`text-2xl font-bold ${pctChange >= 0 ? "text-red-500" : "text-green-500"}`}>
-            {pctChange >= 0 ? "+" : ""}{pctChange}%
-          </p>
-        </div>
+    <div className="space-y-8 max-w-5xl">
+      <div>
+        <h1 className="text-2xl font-bold">Usage</h1>
+        <p className="text-muted-foreground text-sm mt-1">
+          Your token spend across providers — based on your own API keys.
+        </p>
       </div>
 
-      <Tabs defaultValue="overview">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="by-provider">By Provider</TabsTrigger>
-          <TabsTrigger value="by-project">By Project</TabsTrigger>
-          <TabsTrigger value="by-team">By Team</TabsTrigger>
-          <TabsTrigger value="sessions">Sessions</TabsTrigger>
-        </TabsList>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader className="pb-1 pt-4">
+            <CardTitle className="text-xs text-muted-foreground font-medium">
+              Total tokens (all time)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold tabular-nums">
+              {fmtNumber(summary.total_tokens)}
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-1 pt-4">
+            <CardTitle className="text-xs text-muted-foreground font-medium">
+              Total cost (all time)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold tabular-nums">
+              {fmtMoney(summary.total_cost_usd, 4)}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
 
-        <TabsContent value="overview" className="mt-4 space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {mockUsage.by_provider.map((p) => (
-              <Card key={p.provider} className="border-l-4" style={{ borderLeftColor: p.color }}>
-                <CardHeader className="pb-1 pt-4">
-                  <CardTitle className="text-sm text-muted-foreground">{p.label}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-2xl font-bold">${p.month_usd.toFixed(2)}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">this month</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+      {!hasAny && (
+        <Card>
+          <CardContent className="pt-6 pb-6 text-center text-sm text-muted-foreground">
+            No usage logged yet. Run a chat, compare, or synthesis to start
+            tracking spend.
+          </CardContent>
+        </Card>
+      )}
 
-          <div>
-            <h3 className="text-sm font-semibold mb-3">Top Sessions</h3>
-            <div className="space-y-2">
-              {mockUsage.top_sessions.map((s, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between rounded-lg border px-4 py-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium">{s.title}</p>
-                    <p className="text-xs text-muted-foreground">{s.project} · {s.date}</p>
-                  </div>
-                  <span className="text-sm font-semibold">${s.cost_usd.toFixed(2)}</span>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-semibold">By provider</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {summary.by_provider.length === 0 && (
+            <p className="text-xs text-muted-foreground">No data.</p>
+          )}
+          {summary.by_provider.map((p) => {
+            const pct = (p.cost_usd / maxProviderCost) * 100;
+            const color = PROVIDER_BG[p.provider] ?? "bg-zinc-400";
+            return (
+              <div key={p.provider} className="space-y-1">
+                <div className="flex items-baseline justify-between text-xs">
+                  <span className="font-medium">
+                    {getProviderLabel(p.provider)}
+                  </span>
+                  <span className="text-muted-foreground tabular-nums">
+                    {fmtNumber(p.tokens)} tok · {fmtMoney(p.cost_usd, 4)}
+                  </span>
                 </div>
-              ))}
-            </div>
-          </div>
-        </TabsContent>
+                <div className="h-2 rounded bg-muted overflow-hidden">
+                  <div
+                    className={`h-full ${color}`}
+                    style={{ width: `${Math.max(2, pct)}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
 
-        <TabsContent value="by-provider" className="mt-4">
-          <div className="rounded-lg border overflow-hidden">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-semibold">
+            Daily cost (last 30 days)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-end gap-1 h-40">
+            {summary.by_day.map((d) => {
+              const pct = (d.cost_usd / maxDayCost) * 100;
+              return (
+                <div
+                  key={d.date}
+                  className="flex-1 flex flex-col items-center gap-1 group min-w-0"
+                  title={`${d.date}: ${fmtMoney(d.cost_usd, 4)}, ${fmtNumber(d.tokens)} tokens`}
+                >
+                  <div className="flex-1 w-full flex items-end">
+                    <div
+                      className="w-full bg-primary/70 rounded-t group-hover:bg-primary transition-colors"
+                      style={{ height: `${Math.max(2, pct)}%` }}
+                    />
+                  </div>
+                  <span className="text-[9px] text-muted-foreground tabular-nums">
+                    {fmtDay(d.date)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-semibold">By action type</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-muted/50">
+              <thead className="bg-muted/40">
                 <tr>
-                  {["Provider", "Model", "Month Spend", "Tokens In", "Tokens Out", "Error Rate"].map((h) => (
-                    <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">
-                      {h}
-                    </th>
-                  ))}
+                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">
+                    Action
+                  </th>
+                  <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">
+                    Calls
+                  </th>
+                  <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">
+                    Tokens
+                  </th>
+                  <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">
+                    Cost
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {MOCK_PROVIDER_TABLE.map((row, i) => (
-                  <tr key={i} className="border-t">
-                    <td className="px-4 py-3 font-medium">{row.provider}</td>
-                    <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{row.model}</td>
-                    <td className="px-4 py-3">${row.month_usd.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{row.tokens_in}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{row.tokens_out}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{row.error_rate}</td>
+                {summary.by_action.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className="px-3 py-4 text-center text-xs text-muted-foreground"
+                    >
+                      No data.
+                    </td>
+                  </tr>
+                )}
+                {summary.by_action.map((a) => (
+                  <tr key={a.action} className="border-t">
+                    <td className="px-3 py-2">
+                      {ACTION_LABEL[a.action] ?? a.action}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtNumber(a.count)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtNumber(a.tokens)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtMoney(a.cost_usd, 4)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </TabsContent>
+        </CardContent>
+      </Card>
 
-        {["by-project", "by-team", "sessions"].map((tab) => (
-          <TabsContent key={tab} value={tab} className="mt-4">
-            <p className="text-muted-foreground text-sm py-8 text-center">Coming soon.</p>
-          </TabsContent>
-        ))}
-      </Tabs>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-semibold">
+            Top 5 models (by call count)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40">
+                <tr>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">
+                    Model
+                  </th>
+                  <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">
+                    Calls
+                  </th>
+                  <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">
+                    Tokens
+                  </th>
+                  <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">
+                    Cost
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.top_models.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className="px-3 py-4 text-center text-xs text-muted-foreground"
+                    >
+                      No data.
+                    </td>
+                  </tr>
+                )}
+                {summary.top_models.map((m) => (
+                  <tr key={`${m.provider}:${m.model}`} className="border-t">
+                    <td className="px-3 py-2">
+                      <div className="font-medium">
+                        {getModelDisplayName(m.provider, m.model)}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {getProviderLabel(m.provider)}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtNumber(m.count)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtNumber(m.tokens)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtMoney(m.cost_usd, 4)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
