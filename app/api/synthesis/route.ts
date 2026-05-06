@@ -8,6 +8,9 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers";
 import { SYNTHESIS_PROMPT } from "@/lib/prompts/synthesis";
+import { MEMORY_EXTRACTION_PROMPT } from "@/lib/prompts/memory";
+import { MEMORY_FIELDS, type MemoryFieldKey } from "@/lib/memory/fields";
+import { upsertMemoryFields } from "@/lib/memory/queries";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -237,6 +240,111 @@ export async function POST(req: NextRequest) {
       cost_usd: cost,
       latency_ms: latency,
     });
+
+    // ─── Auto-extract project memory (best-effort) ─────────────────────────
+    if (projectId) {
+      try {
+        const { data: proj } = await serviceClient
+          .from("projects")
+          .select("memory_enabled")
+          .eq("id", projectId)
+          .single();
+
+        if ((proj as { memory_enabled: boolean } | null)?.memory_enabled) {
+          const { data: existing } = await serviceClient
+            .from("project_memory")
+            .select("*")
+            .eq("project_id", projectId)
+            .maybeSingle();
+
+          const current = (existing ?? {}) as Partial<
+            Record<MemoryFieldKey, string | null>
+          >;
+
+          let extractionPrompt = MEMORY_EXTRACTION_PROMPT;
+          for (const f of MEMORY_FIELDS) {
+            extractionPrompt = extractionPrompt.replace(
+              `{{${f.key}}}`,
+              (current[f.key] as string | null) || "(empty)"
+            );
+          }
+          extractionPrompt = extractionPrompt
+            .replace("{{question}}", prompt)
+            .replace("{{synthesis}}", result.text);
+
+          const extractionResult = await generateText({
+            model: synthModel,
+            messages: [{ role: "user", content: extractionPrompt }],
+          });
+
+          // Robust JSON extraction: strip fences, then fall back to the
+          // outermost {...} substring if the model wrapped the JSON in prose.
+          const rawText = extractionResult.text.trim();
+          let raw = rawText;
+          const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (fenceMatch) raw = fenceMatch[1].trim();
+
+          let parsed: Record<string, unknown> = {};
+          const tryParse = (s: string) => {
+            try {
+              const v = JSON.parse(s);
+              if (v && typeof v === "object" && !Array.isArray(v)) {
+                parsed = v as Record<string, unknown>;
+                return true;
+              }
+            } catch {
+              /* fall through */
+            }
+            return false;
+          };
+          if (!tryParse(raw)) {
+            const first = raw.indexOf("{");
+            const last = raw.lastIndexOf("}");
+            if (first !== -1 && last > first) {
+              tryParse(raw.slice(first, last + 1));
+            }
+          }
+
+          const updates: Partial<Record<MemoryFieldKey, string>> = {};
+          for (const f of MEMORY_FIELDS) {
+            const v = parsed[f.key];
+            if (typeof v === "string" && v.trim().length > 0) {
+              updates[f.key] = v;
+            }
+          }
+
+          if (Object.keys(updates).length > 0) {
+            await upsertMemoryFields({
+              userId: user.id,
+              projectId,
+              updates,
+            });
+          }
+
+          const extractTokensIn = extractionResult.usage?.promptTokens ?? 0;
+          const extractTokensOut = extractionResult.usage?.completionTokens ?? 0;
+          await serviceClient.from("usage_logs").insert({
+            user_id: user.id,
+            conversation_id,
+            action: "memory_extraction",
+            provider: synth.provider,
+            model: synth.model,
+            tokens_in: extractTokensIn,
+            tokens_out: extractTokensOut,
+            cost_usd: calcCost(
+              synth.provider,
+              synth.model,
+              extractTokensIn,
+              extractTokensOut
+            ),
+            latency_ms: 0,
+          });
+        }
+      } catch (err) {
+        // Memory extraction is best-effort — never fail the synthesis on this
+        console.error("memory extraction failed:", err);
+      }
+    }
 
     return NextResponse.json({
       success: true,
