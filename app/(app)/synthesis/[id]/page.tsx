@@ -10,6 +10,7 @@ import {
 } from "@/lib/providers/models";
 import { cn } from "@/lib/utils";
 import { SynthesisActions } from "./synthesis-actions";
+import { ShareDialog } from "@/components/synthesis/share-dialog";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,7 @@ export default async function SynthesisPage({
   const { data: synth } = await serviceClient
     .from("syntheses")
     .select(
-      "id, user_id, conversation_id, project_id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at"
+      "id, user_id, conversation_id, project_id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, is_public, share_token"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -61,6 +62,8 @@ export default async function SynthesisPage({
     latency_ms: number;
     source_response_ids: string[];
     created_at: string;
+    is_public: boolean;
+    share_token: string | null;
   };
 
   // Load the source model_responses to render the "models used" pills
@@ -138,7 +141,16 @@ export default async function SynthesisPage({
 
       <Separator />
 
-      <SynthesisActions content={synthesis.content} />
+      <SynthesisActions
+        content={synthesis.content}
+        shareSlot={
+          <ShareDialog
+            synthesisId={synthesis.id}
+            initialIsPublic={synthesis.is_public}
+            initialShareToken={synthesis.share_token}
+          />
+        }
+      />
     </div>
   );
 }
