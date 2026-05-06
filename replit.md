@@ -37,8 +37,11 @@ artifacts/
       api/synthesis/route.ts      # Generate LettiB Synthesis from saved compare session
       api/conversations/route.ts                # GET list (project_id, limit query params)
       api/conversations/[id]/route.ts           # GET full thread · PATCH (project_id|title) · DELETE (soft)
+      api/memory/[projectId]/route.ts           # GET project memory · PATCH per-field upsert
       (app)/chat/[id]/page.tsx                  # Read-only conversation viewer (chat thread + compare side-by-side)
       (app)/projects/[id]/chats/page.tsx        # All conversations for a project (search + mode filter)
+      (app)/projects/[id]/memory/page.tsx       # Dedicated memory editor (auto-save on blur)
+      (app)/projects/[id]/actions.ts            # updateMemoryField + toggleProjectMemory server actions
       (app)/teams/                # AI Teams CRUD (server component, force-dynamic)
         actions.ts                # createTeam, updateTeam, deleteTeam, listTeams, generateStarterTeams
         page.tsx                  # Auto-generates starter teams when 2+ providers + 0 teams
@@ -68,6 +71,9 @@ artifacts/
       prompts/synthesis.ts        # SYNTHESIS_PROMPT + MEMORY_INJECTION_PROMPT
       prompts/scoring.ts          # SCORING_PROMPT + buildScoringMessage
       conversations/queries.ts    # listConversationsForUser — counts + cost aggregation
+      memory/fields.ts            # MEMORY_FIELDS catalog + MemoryRow type + isMemoryFieldKey
+      memory/queries.ts           # loadProjectMemory + upsertMemoryFields (ownership-checked)
+      prompts/memory.ts           # MEMORY_INJECTION_PROMPT (re-export) + MEMORY_EXTRACTION_PROMPT
     supabase/migrations/
       001_projects.sql            # Core schema
       002_handle_new_user.sql     # New-user trigger
@@ -78,6 +84,7 @@ artifacts/
       007_api_connections_rls.sql # RLS policies for api_connections ← run manually
       008_compare_tables.sql      # model_responses + syntheses tables, conversations.mode ← run manually
       009_conversations_soft_delete.sql  # conversations.deleted_at + partial indexes ← run manually
+      010_project_memory.sql      # project_memory table + RLS + auto-bump updated_at trigger ← run manually
 ```
 
 ## Environment Variables
@@ -113,6 +120,8 @@ Helpers: `getModelById(provider, modelId)`, `getModelDisplayName(provider, model
 - **Synthesis**: `/api/synthesis` reads saved `model_responses`, generates via SYNTHESIS_PROMPT using first successful response's provider, writes to `syntheses` table, redirects to `/synthesis/[id]`
 - **Conversation history**: `lib/conversations/queries.ts#listConversationsForUser` aggregates message_count + cost_usd from both `messages` (chat mode) and `model_responses` (compare mode); shared by dashboard recent-activity, `/projects/[id]/chats`, and `/api/conversations`. Soft delete via `conversations.deleted_at IS NULL` filter on every read path
 - **Conversation mutations**: `/api/conversations/[id]` PATCH validates destination project ownership before reassigning project_id; DELETE is soft (sets deleted_at). All routes use service-role client + explicit user_id ownership check
+- **Project Memory**: 6-field column schema (project_goal, important_decisions, user_preferences, key_facts, open_questions, next_steps) on `project_memory`, primary key = project_id. `lib/memory/fields.ts` is the single source of truth for field labels/keys; `isMemoryFieldKey()` allowlist gates every PATCH to prevent column-name injection. UI auto-saves per-field on blur via `/api/memory/[projectId]` PATCH. Memory toggle uses new `toggleProjectMemory` server action in `app/(app)/projects/[id]/actions.ts` (separate from project CRUD actions in `app/(app)/projects/actions.ts`)
+- **Memory auto-extraction**: After `/api/synthesis` saves a synthesis, if the project has `memory_enabled=true`, runs MEMORY_EXTRACTION_PROMPT through the same model/key used for synthesis. Returns strict JSON of changed fields only — best-effort, never fails the synthesis. JSON parsing strips markdown fences and falls back to the outermost `{...}` substring if the model wraps the object in prose. Append semantics for `important_decisions`/`key_facts` are enforced by prompt instruction, NOT server-side merge — if the model omits prior content, history is lost (acceptable v1 risk; future: server-side append). Memory form auto-save uses a per-field monotonic write counter to prevent out-of-order PATCH responses from overwriting newer content. Logged to `usage_logs` with `action='memory_extraction'`
 - **Vercel deployment**: Node.js server mode, no static export
 
 ## Development Commands
