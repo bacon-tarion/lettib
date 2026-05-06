@@ -1,25 +1,27 @@
 import Link from "next/link";
-import { MessageSquare, GitCompare, FolderPlus, Sparkles } from "lucide-react";
+import { MessageSquare, GitCompare, FolderPlus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ProjectCard } from "@/components/projects/project-card";
-import { mockUser, mockProjects, mockActivity, mockUsage } from "@/lib/mockData";
+import { mockUser, mockProjects, mockUsage } from "@/lib/mockData";
+import { createClient } from "@/lib/supabase/server";
+import { listConversationsForUser } from "@/lib/conversations/queries";
+import { getModelDisplayName } from "@/lib/providers/models";
 
 function formatRelative(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
-  const h = Math.floor(diff / 3_600_000);
-  if (h < 1) return "just now";
+  const m = Math.floor(diff / 60_000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
 }
 
-const activityIcons = {
+const modeIcons = {
   chat: MessageSquare,
   compare: GitCompare,
-  synthesis: Sparkles,
 } as const;
-
-type ActivityType = keyof typeof activityIcons;
 
 const quickActions = [
   { label: "New Chat", icon: MessageSquare, href: "/chat", desc: "Start a conversation" },
@@ -27,13 +29,56 @@ const quickActions = [
   { label: "New Project", icon: FolderPlus, href: "/projects", desc: "Organise your work" },
 ];
 
-export default function DashboardPage() {
-  const pinned = mockProjects.filter((p) => p.pinned);
+export default async function DashboardPage() {
+  let displayName = mockUser.display_name;
+  let pinnedProjects: Array<{
+    id: string;
+    name: string;
+    description?: string | null;
+    pinned: boolean;
+    memory_enabled?: boolean;
+    default_ai_team?: string;
+    chat_count?: number;
+    synthesis_count?: number;
+    updated_at: string;
+  }> = mockProjects.filter((p) => p.pinned);
+  let recentActivity: Awaited<
+    ReturnType<typeof listConversationsForUser>
+  > = [];
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (user) {
+    displayName =
+      (user.user_metadata?.display_name as string | undefined) ??
+      user.email?.split("@")[0] ??
+      "there";
+
+    const [{ data: pinnedData }, recent] = await Promise.all([
+      supabase
+        .from("projects")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("pinned", true)
+        .eq("archived", false)
+        .order("updated_at", { ascending: false })
+        .limit(4),
+      listConversationsForUser({ userId: user.id, limit: 8 }),
+    ]);
+
+    if (pinnedData && pinnedData.length > 0) {
+      pinnedProjects = pinnedData;
+    }
+    recentActivity = recent;
+  }
 
   return (
     <div className="space-y-8 max-w-6xl">
       <div>
-        <h1 className="text-2xl font-bold">Welcome back, {mockUser.display_name}.</h1>
+        <h1 className="text-2xl font-bold">Welcome back, {displayName}.</h1>
         <p className="text-muted-foreground text-sm mt-1">
           Here&apos;s what&apos;s happening in your workspace.
         </p>
@@ -64,53 +109,67 @@ export default function DashboardPage() {
             <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
               Pinned Projects
             </h2>
-            <div className="flex gap-4 overflow-x-auto pb-2">
-              {pinned.map((p) => (
-                <div key={p.id} className="shrink-0 w-64">
-                  <ProjectCard {...p} />
-                </div>
-              ))}
-            </div>
+            {pinnedProjects.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">
+                No pinned projects yet. Pin a project to see it here.
+              </p>
+            ) : (
+              <div className="flex gap-4 overflow-x-auto pb-2">
+                {pinnedProjects.map((p) => (
+                  <div key={p.id} className="shrink-0 w-64">
+                    <ProjectCard {...p} description={p.description ?? undefined} />
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <section>
             <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
               Recent Activity
             </h2>
-            <div className="space-y-0.5">
-              {mockActivity.map((a) => {
-                const Icon =
-                  activityIcons[a.type as ActivityType] ?? MessageSquare;
-                return (
-                  <div
-                    key={a.id}
-                    className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="rounded-md bg-muted p-1.5 shrink-0">
-                      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{a.title}</p>
-                      <p className="text-xs text-muted-foreground">{a.project}</p>
-                    </div>
-                    <div className="flex gap-1 shrink-0">
-                      {a.models.slice(0, 2).map((m) => (
-                        <Badge
-                          key={m}
-                          variant="secondary"
-                          className="text-xs px-1.5 py-0"
-                        >
-                          {m.split("-")[0]}
-                        </Badge>
-                      ))}
-                    </div>
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {formatRelative(a.updated_at)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+            {recentActivity.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">
+                No conversations yet. Start a chat or compare to see activity here.
+              </p>
+            ) : (
+              <div className="space-y-0.5">
+                {recentActivity.map((c) => {
+                  const Icon = modeIcons[c.mode] ?? MessageSquare;
+                  return (
+                    <Link
+                      key={c.id}
+                      href={`/chat/${c.id}`}
+                      className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors"
+                    >
+                      <div className="rounded-md bg-muted p-1.5 shrink-0">
+                        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{c.title}</p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {c.project_name ?? "No project"} ·{" "}
+                          {c.message_count} msg · ${c.cost_usd.toFixed(4)}
+                        </p>
+                      </div>
+                      <div className="flex gap-1 shrink-0">
+                        {c.provider && c.model && (
+                          <Badge
+                            variant="secondary"
+                            className="text-[10px] px-1.5 py-0"
+                          >
+                            {getModelDisplayName(c.provider, c.model)}
+                          </Badge>
+                        )}
+                      </div>
+                      <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
+                        {formatRelative(c.updated_at)}
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
           </section>
         </div>
 
@@ -148,7 +207,10 @@ export default function DashboardPage() {
                       <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                         <div
                           className="h-full rounded-full"
-                          style={{ width: `${pct}%`, backgroundColor: p.color }}
+                          style={{
+                            width: `${pct}%`,
+                            backgroundColor: p.color,
+                          }}
                         />
                       </div>
                     </div>
