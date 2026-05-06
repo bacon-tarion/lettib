@@ -12,8 +12,9 @@ LettiB is a multi-AI workspace SaaS for AI power users. Users bring their own AP
 | Language | TypeScript (strict mode) |
 | Styling | Tailwind CSS 3 + shadcn/ui (neutral base) |
 | Auth & DB | Supabase (`@supabase/ssr`) |
-| AI SDK | Vercel AI SDK (`ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`) |
-| xAI | OpenAI-compat via `@ai-sdk/openai` with custom base URL |
+| Key Storage | Supabase Vault (encrypted at rest) |
+| AI SDK | Vercel AI SDK (`ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/xai`) |
+| Streaming | `streamText` → `toDataStreamResponse()` + `useChat` (chat) · custom SSE multiplex (compare) |
 | Deployment Target | Vercel |
 
 ## Repository Structure
@@ -26,58 +27,59 @@ artifacts/
       (auth)/signup/              # Sign-up page
       (app)/dashboard/            # Protected dashboard
       (app)/projects/             # Project list + [id] detail
+        actions.ts                # createProject, updateProject, deleteProject, togglePin, toggleMemory
+        [id]/page.tsx             # Client component — tabs: Chats, Syntheses, Memory, Notes, Settings
       (app)/chat/                 # Single-model chat
-      (app)/compare/              # Side-by-side model comparison
+      (app)/compare/              # Side-by-side model comparison (server wrapper + CompareUI)
       (app)/synthesis/[id]/       # Synthesis viewer
-      (app)/teams/                # Teams management
-      (app)/settings/             # User settings
+      api/compare/route.ts        # SSE-multiplexed parallel streaming across team members
+      api/compare/save/route.ts   # Persist responses + LLM scoring pass
+      api/synthesis/route.ts      # Generate LettiB Synthesis from saved compare session
+      (app)/teams/                # AI Teams CRUD (server component, force-dynamic)
+        actions.ts                # createTeam, updateTeam, deleteTeam, listTeams, generateStarterTeams
+        page.tsx                  # Auto-generates starter teams when 2+ providers + 0 teams
+      (app)/settings/             # User settings (server component)
+        actions.ts                # addApiKey, testApiKey, deleteApiKey, listApiKeys
+        page.tsx                  # Async server component — fetches connections + user
+        settings-content.tsx      # Client tabs component
       (app)/usage/                # Token usage & cost
       (app)/admin/                # Admin panel
-      (marketing)/                # Landing page
-      (marketing)/pricing/        # Pricing
-      (marketing)/privacy/        # Privacy policy
-      (marketing)/terms/          # Terms of service
-      (marketing)/roadmap/        # Roadmap
-      api/chat/                   # POST /api/chat
-      api/compare/                # POST /api/compare
-      api/synthesis/              # POST /api/synthesis
-      api/keys/                   # GET /api/keys
+      (marketing)/                # Landing page + pricing/privacy/terms/roadmap
     components/
-      ui/                         # shadcn/ui primitives (button, card, badge, input, …)
+      ui/                         # shadcn/ui primitives
       layout/                     # Sidebar, Header, BottomNav
-      chat/                       # MessageBubble
-      compare/                    # ResponseCard
+      settings/                   # api-key-tile.tsx, add-key-dialog.tsx
+      teams/                      # team-card.tsx, team-dialog.tsx, teams-grid.tsx
+      chat/                       # MessageBubble + chat-ui.tsx (useChat hook)
+      compare/                    # response-card.tsx (streaming + scores) + compare-ui.tsx
       projects/                   # ProjectCard
       usage/                      # UsageWidget
     lib/
       supabase/client.ts          # Browser Supabase client
       supabase/server.ts          # Server Supabase client (async cookies)
+      supabase/service.ts         # Service-role client (vault ops only — server-side)
       supabase/middleware.ts      # Session refresh + auth guard
-      providers/models.ts         # MODELS_CATALOG + DEFAULT_TEAM_MODELS
-      providers/openai.ts         # createOpenAIClient helper
-      providers/anthropic.ts      # createAnthropicClient helper
-      providers/google.ts         # createGoogleClient helper
-      providers/xai.ts            # createXAIClient helper (xAI via OpenAI compat)
+      providers/models.ts         # MODELS_CATALOG + getProviderLabel + getModelById + getModelDisplayName + getProviderForModel
+      providers/openai|anthropic|google|xai.ts  # Provider factory functions
       prompts/synthesis.ts        # SYNTHESIS_PROMPT + MEMORY_INJECTION_PROMPT
-      utils.ts                    # cn() utility
-    middleware.ts                 # Next.js middleware (auth guards)
-    next.config.mjs               # Next.js config
-    tailwind.config.ts            # Tailwind config (shadcn CSS vars)
-    postcss.config.mjs            # PostCSS config
-    .env.example                  # Environment variable template
-    supabase/migrations/          # SQL migration files (empty, ready for schema)
-    tests/                        # Playwright tests (placeholder)
-    .github/workflows/ci.yml      # GitHub Actions CI
+      prompts/scoring.ts          # SCORING_PROMPT + buildScoringMessage
+    supabase/migrations/
+      001_projects.sql            # Core schema
+      002_handle_new_user.sql     # New-user trigger
+      003_autoconfirm_email.sql   # Auto-confirm for dev
+      004_enable_vault.sql        # Enable supabase_vault extension ← run manually
+      005_add_custom_provider.sql # Add 'custom' provider + columns ← run manually
+      006_grant_service_role.sql  # GRANT service_role on api_connections ← run manually
+      007_api_connections_rls.sql # RLS policies for api_connections ← run manually
+      008_compare_tables.sql      # model_responses + syntheses tables, conversations.mode ← run manually
 ```
 
 ## Environment Variables
 
-All 8 required vars are defined in `.env.example`:
-
 ```
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_SERVICE_ROLE_KEY=      ← required for Vault + Teams operations
 VAULT_ENCRYPTION_KEY=
 ALLOWED_ADMIN_EMAILS=
 ANTHROPIC_API_KEY=
@@ -85,29 +87,29 @@ RESEND_API_KEY=
 STANDUP_EMAIL_TO=
 ```
 
-Copy to `.env.local` and fill in values before developing.
-
 ## Models Catalog
 
-Defined in `lib/providers/models.ts` as `MODELS_CATALOG`. Providers:
-- **openai**: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, gpt-5.1
-- **anthropic**: claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5
-- **google**: gemini-3.1-pro, gemini-3-flash, gemini-2.5-pro, gemini-2.5-flash
-- **xai**: grok-4.1, grok-4
+Defined in `lib/providers/models.ts`. Providers: `openai`, `anthropic`, `google`, `xai`, `custom`.
+Helpers: `getModelById(provider, modelId)`, `getModelDisplayName(provider, modelId)`, `getProviderForModel(modelId)`.
 
 ## Key Architecture Decisions
 
 - **App Router with route groups**: `(auth)`, `(app)`, `(marketing)` — no layout nesting conflicts
-- **Supabase SSR cookies pattern**: uses `@supabase/ssr` `createServerClient` in both server components and middleware
-- **Middleware auth guard**: protects `/dashboard /projects /chat /compare /synthesis /teams /settings /usage /admin`; redirects logged-in users away from `/login` and `/signup`
-- **AI providers**: each provider has a factory function in `lib/providers/`; user API keys will be retrieved from Supabase Vault at runtime
-- **Prompts**: `SYNTHESIS_PROMPT` and `MEMORY_INJECTION_PROMPT` use `{{placeholder}}` template syntax
-- **Vercel deployment**: `next.config.mjs` is standard; no `next export` — Node.js server mode
+- **Supabase SSR cookies pattern**: `@supabase/ssr` `createServerClient` in server components + middleware
+- **Vault key storage**: API keys written to `vault.secrets` via service-role client; only `key_last_four` ever reaches the browser
+- **Service-role client pattern**: ALL `api_connections` and `ai_teams` queries use `serviceClient` (bypasses RLS) with explicit `user_id` filter — avoids RLS SELECT policy issues
+- **Teams soft delete**: `ai_teams.deleted_at` — never hard-delete; `listTeams` filters `IS NULL`
+- **Teams auto-generation**: `/teams` server component calls `generateStarterTeams()` on first load when 2+ providers connected and 0 teams exist
+- **Middleware auth guard**: protects `/dashboard /projects /chat /compare /synthesis /teams /settings /usage /admin`
+- **5 providers**: openai, anthropic, google, xai, custom (any OpenAI-compatible endpoint)
+- **Compare SSE multiplex**: `/api/compare` runs all team members in parallel via `Promise.all`, emits a single `text/event-stream` with `{type, key, ...}` envelopes (`start` / `chunk` / `done` / `error` / `all_done`); client parses by `\n\n` and routes by `key` to per-card state
+- **Compare scoring**: `/api/compare/save` reuses the first successful response's provider+model as the scorer (uses keys already paid for); scoring is best-effort — if it fails, conversation + responses still persist
+- **Synthesis**: `/api/synthesis` reads saved `model_responses`, generates via SYNTHESIS_PROMPT using first successful response's provider, writes to `syntheses` table, redirects to `/synthesis/[id]`
+- **Vercel deployment**: Node.js server mode, no static export
 
 ## Development Commands
 
 ```bash
-# From workspace root
 pnpm --filter @workspace/lettib run dev        # Start dev server
 pnpm --filter @workspace/lettib run build      # Production build
 pnpm --filter @workspace/lettib run typecheck  # TypeScript check
@@ -116,4 +118,17 @@ pnpm --filter @workspace/lettib run lint       # ESLint
 
 ## Build Status
 
-✅ `pnpm build` passes — 22 routes, zero errors, zero warnings.
+✅ `pnpm build` passes — 25 routes, zero errors, zero warnings.
+
+## User Preferences
+
+- GitHub repo: `bacon-tarion/lettib` — push via Replit Connectors Contents API (requires `Accept: application/vnd.github+json` header, one file per PUT call, sequential not parallel to avoid SHA conflicts)
+- Migrations run manually in Supabase SQL Editor — do not auto-run
+
+## Gotchas
+
+- Push GitHub files sequentially (not parallel) — concurrent PUTs to same repo cause 409 SHA conflicts
+- `ai_teams` and `ai_team_members` tables must exist in Supabase with RLS before Teams feature works
+- `generateStarterTeams` only creates teams where 2+ members have connected providers (skips teams with < 2 eligible models)
+- Compare via workspace proxy (`localhost:80`) may return 502 on first cold compile — proxy timeout is shorter than Next dev compile time. Hit `localhost:$PORT` directly when smoke-testing
+- Migration 008 must run before Compare works — needs `model_responses`, `syntheses`, and `conversations.mode` column
