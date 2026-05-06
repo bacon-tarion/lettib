@@ -181,6 +181,41 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
       setResponses(next);
     };
 
+    const handleEvent = (raw: string) => {
+      const line = raw.split("\n").find((l) => l.startsWith("data: "));
+      if (!line) return;
+      try {
+        const obj = JSON.parse(line.slice(6));
+        switch (obj.type) {
+          case "start":
+            updateResponse(obj.key, { status: "streaming" });
+            break;
+          case "chunk":
+            updateResponse(obj.key, (prev) => ({
+              content: prev.content + (obj.text as string),
+              status: "streaming",
+            }));
+            break;
+          case "done":
+            updateResponse(obj.key, {
+              status: "done",
+              tokensIn: obj.tokens_in ?? 0,
+              tokensOut: obj.tokens_out ?? 0,
+              latencyMs: obj.latency_ms,
+            });
+            break;
+          case "error":
+            updateResponse(obj.key, {
+              status: "error",
+              error: obj.error || "Request failed",
+            });
+            break;
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -188,41 +223,27 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
 
       const events = buffer.split("\n\n");
       buffer = events.pop() ?? "";
+      for (const ev of events) handleEvent(ev);
+    }
 
-      for (const ev of events) {
-        const line = ev.split("\n").find((l) => l.startsWith("data: "));
-        if (!line) continue;
-        try {
-          const obj = JSON.parse(line.slice(6));
-          switch (obj.type) {
-            case "start":
-              updateResponse(obj.key, { status: "streaming" });
-              break;
-            case "chunk":
-              updateResponse(obj.key, (prev) => ({
-                content: prev.content + (obj.text as string),
-                status: "streaming",
-              }));
-              break;
-            case "done":
-              updateResponse(obj.key, {
-                status: "done",
-                tokensIn: obj.tokens_in ?? 0,
-                tokensOut: obj.tokens_out ?? 0,
-                latencyMs: obj.latency_ms,
-              });
-              break;
-            case "error":
-              updateResponse(obj.key, {
-                status: "error",
-                error: obj.error || "Request failed",
-              });
-              break;
-          }
-        } catch {
-          // ignore parse errors
-        }
-      }
+    // Flush any trailing bytes the decoder was holding, then emit the last
+    // event if the stream didn't end with a clean `\n\n`.
+    buffer += decoder.decode();
+    if (buffer.trim()) handleEvent(buffer);
+
+    // Mark anything still pending/streaming as a failure so the UI doesn't
+    // sit forever if the server died mid-flight.
+    const stuck = responsesRef.current.filter(
+      (r) => r.status === "pending" || r.status === "streaming"
+    );
+    if (stuck.length > 0) {
+      const next = responsesRef.current.map((r) =>
+        r.status === "pending" || r.status === "streaming"
+          ? { ...r, status: "error" as const, error: "Stream ended unexpectedly" }
+          : r
+      );
+      responsesRef.current = next;
+      setResponses(next);
     }
 
     // All streams complete — save + score
@@ -250,6 +271,9 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
       });
 
       const data = await saveRes.json();
+      if (!saveRes.ok) {
+        throw new Error(data.error || `Save failed (${saveRes.status})`);
+      }
       if (data.conversation_id) setConversationId(data.conversation_id);
       if (Array.isArray(data.scores)) {
         const scoreByKey = new Map<string, ResponseCardScores>(
