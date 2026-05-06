@@ -42,6 +42,9 @@ artifacts/
       (app)/projects/[id]/chats/page.tsx        # All conversations for a project (search + mode filter)
       (app)/projects/[id]/memory/page.tsx       # Dedicated memory editor (auto-save on blur)
       (app)/projects/[id]/actions.ts            # updateMemoryField + toggleProjectMemory server actions
+      (app)/search/page.tsx                     # Global search — reads ?q from URL
+      (app)/search/search-client.tsx            # Debounced search client w/ seq guard + AbortController + URL sync
+      api/search/route.ts                       # GET ?q= → calls search_user_content RPC, returns grouped results
       (app)/teams/                # AI Teams CRUD (server component, force-dynamic)
         actions.ts                # createTeam, updateTeam, deleteTeam, listTeams, generateStarterTeams
         page.tsx                  # Auto-generates starter teams when 2+ providers + 0 teams
@@ -73,6 +76,7 @@ artifacts/
       conversations/queries.ts    # listConversationsForUser — counts + cost aggregation
       memory/fields.ts            # MEMORY_FIELDS catalog + MemoryRow type + isMemoryFieldKey
       memory/queries.ts           # loadProjectMemory + upsertMemoryFields (ownership-checked)
+      search/types.ts             # SearchResult shape + normaliseRow + groupResults + hrefForResult
       prompts/memory.ts           # MEMORY_INJECTION_PROMPT (re-export) + MEMORY_EXTRACTION_PROMPT
     supabase/migrations/
       001_projects.sql            # Core schema
@@ -113,7 +117,8 @@ Helpers: `getModelById(provider, modelId)`, `getModelDisplayName(provider, model
 - **Service-role client pattern**: ALL `api_connections` and `ai_teams` queries use `serviceClient` (bypasses RLS) with explicit `user_id` filter — avoids RLS SELECT policy issues
 - **Teams soft delete**: `ai_teams.deleted_at` — never hard-delete; `listTeams` filters `IS NULL`
 - **Teams auto-generation**: `/teams` server component calls `generateStarterTeams()` on first load when 2+ providers connected and 0 teams exist
-- **Middleware auth guard**: protects `/dashboard /projects /chat /compare /synthesis /teams /settings /usage /admin`
+- **Middleware auth guard**: protects `/dashboard /projects /chat /compare /synthesis /teams /settings /usage /admin /search`
+- **Global Search**: `/api/search?q=` calls Supabase RPC `search_user_content(search_query text)` under user auth context (RLS-scoped). Returns flat array of `{type, id, title, snippet, project_id, project_name, updated_at, rank}` rows, normalised defensively in `lib/search/types.ts#normaliseRow`. UI surfaces in two places: `/search` page (debounced 220ms, AbortController per request, monotonic seq guard, URL `?q=` synced via `history.replaceState`) and ⌘K command palette (`components/layout/command-palette.tsx` — debounced 180ms, top-6 per group, "View all → /search" footer). Header search button expands inline input that submits to `/search?q=`
 - **5 providers**: openai, anthropic, google, xai, custom (any OpenAI-compatible endpoint)
 - **Compare SSE multiplex**: `/api/compare` runs all team members in parallel via `Promise.all`, emits a single `text/event-stream` with `{type, key, ...}` envelopes (`start` / `chunk` / `done` / `error` / `all_done`); client parses by `\n\n` and routes by `key` to per-card state
 - **Compare scoring**: `/api/compare/save` reuses the first successful response's provider+model as the scorer (uses keys already paid for); scoring is best-effort — if it fails, conversation + responses still persist
