@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { ReactNode } from "react";
 import {
   Copy,
   RefreshCw,
   Palette,
-  Share2,
   ThumbsUp,
   ThumbsDown,
 } from "lucide-react";
@@ -16,9 +16,10 @@ import { cn } from "@/lib/utils";
 
 interface SynthesisActionsProps {
   content: string;
+  shareSlot?: ReactNode;
 }
 
-export function SynthesisActions({ content }: SynthesisActionsProps) {
+export function SynthesisActions({ content, shareSlot }: SynthesisActionsProps) {
   const [rating, setRating] = useState(0);
   const [hovered, setHovered] = useState(0);
   const [thumbs, setThumbs] = useState<"up" | "down" | null>(null);
@@ -144,10 +145,7 @@ export function SynthesisActions({ content }: SynthesisActionsProps) {
           <Palette className="h-4 w-4" />
           Change Tone
         </Button>
-        <Button variant="outline" size="sm" className="gap-1.5" disabled>
-          <Share2 className="h-4 w-4" />
-          Share
-        </Button>
+        {shareSlot}
       </div>
     </>
   );
