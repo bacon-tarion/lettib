@@ -160,7 +160,9 @@ export async function POST(req: NextRequest) {
         }
       };
 
-      const tasks = teamMembers.map(async (m) => {
+      const PER_MEMBER_TIMEOUT_MS = 90_000;
+
+      const runMember = async (m: TeamMemberRow) => {
         const key = `${m.provider}::${m.model}::${m.id}`;
         const startedAt = Date.now();
 
@@ -221,6 +223,26 @@ export async function POST(req: NextRequest) {
             err instanceof Error ? err.message : "Stream failed";
           enqueue({ type: "error", key, error: message });
         }
+      };
+
+      // Race each member against a timeout so one hanging provider can't
+      // stall the whole compare session. Orphaned work that finishes after
+      // timeout will hit the closed controller's try/catch in `enqueue`.
+      const tasks = teamMembers.map((m) => {
+        const key = `${m.provider}::${m.model}::${m.id}`;
+        return Promise.race([
+          runMember(m),
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              enqueue({
+                type: "error",
+                key,
+                error: `Timed out after ${PER_MEMBER_TIMEOUT_MS / 1000}s`,
+              });
+              resolve();
+            }, PER_MEMBER_TIMEOUT_MS)
+          ),
+        ]);
       });
 
       await Promise.all(tasks);
