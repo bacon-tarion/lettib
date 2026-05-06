@@ -8,7 +8,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -21,6 +20,7 @@ import { Brain, GitCompare, MessageSquare } from "lucide-react";
 import { listTeams } from "@/app/(app)/teams/actions";
 import { updateProject } from "@/app/(app)/projects/actions";
 import type { Team } from "@/app/(app)/teams/actions";
+import { MemoryForm } from "@/components/memory/memory-form";
 
 type RecentChat = {
   id: string;
@@ -31,24 +31,6 @@ type RecentChat = {
   message_count: number;
   cost_usd: number;
   updated_at: string;
-};
-
-const MEMORY_FIELDS = [
-  "Project Goal",
-  "Important Decisions",
-  "User Preferences",
-  "Key Facts",
-  "Open Questions",
-  "Next Steps",
-];
-
-const MOCK_MEMORY_VALUES: Record<string, string> = {
-  "Project Goal": "Build the LettiB multi-AI workspace SaaS to production.",
-  "Important Decisions": "Next.js App Router, Supabase for auth + DB, Vercel AI SDK.",
-  "User Preferences": "Prefers concise technical answers. No fluff.",
-  "Key Facts": "Solo founder. Target market: AI power users.",
-  "Open Questions": "Pricing model — per-seat vs. usage-based?",
-  "Next Steps": "Finish shell, wire Supabase, implement real AI calls.",
 };
 
 function formatDate(dateStr: string) {
@@ -199,18 +181,15 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           )}
         </TabsContent>
 
-        <TabsContent value="memory" className="mt-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {MEMORY_FIELDS.map((field) => (
-              <div key={field} className="space-y-1.5">
-                <Label className="text-xs font-medium">{field}</Label>
-                <Textarea
-                  readOnly
-                  value={MOCK_MEMORY_VALUES[field] ?? ""}
-                  className="resize-none text-xs text-muted-foreground h-20 bg-muted/30"
-                />
-              </div>
-            ))}
+        <TabsContent value="memory" className="mt-4 space-y-4">
+          <MemoryForm projectId={params.id} autoLoad />
+          <div className="text-right">
+            <Link
+              href={`/projects/${params.id}/memory`}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+            >
+              Open full memory editor →
+            </Link>
           </div>
         </TabsContent>
 
@@ -252,12 +231,16 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
 
           <div className="space-y-1.5">
             <Label>Memory</Label>
-            <div className="flex items-center gap-2">
-              <Badge variant={project.memory_enabled ? "default" : "outline"}>
-                {project.memory_enabled ? "Enabled" : "Disabled"}
-              </Badge>
-              <span className="text-xs text-muted-foreground">Toggle coming soon</span>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              Toggle and edit on the{" "}
+              <Link
+                href={`/projects/${params.id}/memory`}
+                className="underline underline-offset-2"
+              >
+                Memory page
+              </Link>
+              .
+            </p>
           </div>
 
           <div className="border-t pt-4 space-y-2">
