@@ -35,6 +35,10 @@ artifacts/
       api/compare/route.ts        # SSE-multiplexed parallel streaming across team members
       api/compare/save/route.ts   # Persist responses + LLM scoring pass
       api/synthesis/route.ts      # Generate LettiB Synthesis from saved compare session
+      api/conversations/route.ts                # GET list (project_id, limit query params)
+      api/conversations/[id]/route.ts           # GET full thread · PATCH (project_id|title) · DELETE (soft)
+      (app)/chat/[id]/page.tsx                  # Read-only conversation viewer (chat thread + compare side-by-side)
+      (app)/projects/[id]/chats/page.tsx        # All conversations for a project (search + mode filter)
       (app)/teams/                # AI Teams CRUD (server component, force-dynamic)
         actions.ts                # createTeam, updateTeam, deleteTeam, listTeams, generateStarterTeams
         page.tsx                  # Auto-generates starter teams when 2+ providers + 0 teams
@@ -63,6 +67,7 @@ artifacts/
       providers/openai|anthropic|google|xai.ts  # Provider factory functions
       prompts/synthesis.ts        # SYNTHESIS_PROMPT + MEMORY_INJECTION_PROMPT
       prompts/scoring.ts          # SCORING_PROMPT + buildScoringMessage
+      conversations/queries.ts    # listConversationsForUser — counts + cost aggregation
     supabase/migrations/
       001_projects.sql            # Core schema
       002_handle_new_user.sql     # New-user trigger
@@ -72,6 +77,7 @@ artifacts/
       006_grant_service_role.sql  # GRANT service_role on api_connections ← run manually
       007_api_connections_rls.sql # RLS policies for api_connections ← run manually
       008_compare_tables.sql      # model_responses + syntheses tables, conversations.mode ← run manually
+      009_conversations_soft_delete.sql  # conversations.deleted_at + partial indexes ← run manually
 ```
 
 ## Environment Variables
@@ -105,6 +111,8 @@ Helpers: `getModelById(provider, modelId)`, `getModelDisplayName(provider, model
 - **Compare SSE multiplex**: `/api/compare` runs all team members in parallel via `Promise.all`, emits a single `text/event-stream` with `{type, key, ...}` envelopes (`start` / `chunk` / `done` / `error` / `all_done`); client parses by `\n\n` and routes by `key` to per-card state
 - **Compare scoring**: `/api/compare/save` reuses the first successful response's provider+model as the scorer (uses keys already paid for); scoring is best-effort — if it fails, conversation + responses still persist
 - **Synthesis**: `/api/synthesis` reads saved `model_responses`, generates via SYNTHESIS_PROMPT using first successful response's provider, writes to `syntheses` table, redirects to `/synthesis/[id]`
+- **Conversation history**: `lib/conversations/queries.ts#listConversationsForUser` aggregates message_count + cost_usd from both `messages` (chat mode) and `model_responses` (compare mode); shared by dashboard recent-activity, `/projects/[id]/chats`, and `/api/conversations`. Soft delete via `conversations.deleted_at IS NULL` filter on every read path
+- **Conversation mutations**: `/api/conversations/[id]` PATCH validates destination project ownership before reassigning project_id; DELETE is soft (sets deleted_at). All routes use service-role client + explicit user_id ownership check
 - **Vercel deployment**: Node.js server mode, no static export
 
 ## Development Commands
