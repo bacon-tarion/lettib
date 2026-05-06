@@ -97,9 +97,23 @@ export async function POST(req: NextRequest) {
 
   const serviceClient = createServiceClient();
 
-  // Resolve project (fall back to Inbox)
-  let resolvedProjectId = project_id || null;
-  if (!resolvedProjectId) {
+  // Resolve project — if client supplied one, verify ownership; else fall back to Inbox.
+  let resolvedProjectId: string | null = null;
+  if (project_id) {
+    const { data: ownedProject } = await serviceClient
+      .from("projects")
+      .select("id")
+      .eq("id", project_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!ownedProject) {
+      return NextResponse.json(
+        { error: "Project not found or not owned by user" },
+        { status: 403 }
+      );
+    }
+    resolvedProjectId = (ownedProject as { id: string }).id;
+  } else {
     const { data: inbox } = await serviceClient
       .from("projects")
       .select("id")
@@ -107,7 +121,7 @@ export async function POST(req: NextRequest) {
       .eq("name", "Inbox")
       .limit(1)
       .maybeSingle();
-    resolvedProjectId = inbox?.id ?? null;
+    resolvedProjectId = (inbox as { id: string } | null)?.id ?? null;
   }
 
   const title = prompt.trim().slice(0, 80);
@@ -134,14 +148,20 @@ export async function POST(req: NextRequest) {
   }
   const conversationId = (conv as { id: string }).id;
 
-  // Insert user prompt as message
-  await serviceClient.from("messages").insert({
+  // Insert user prompt as message — fail loudly on error
+  const { error: msgError } = await serviceClient.from("messages").insert({
     conversation_id: conversationId,
     role: "user",
     content: prompt,
   });
+  if (msgError) {
+    return NextResponse.json(
+      { error: `Failed to save prompt: ${msgError.message}` },
+      { status: 500 }
+    );
+  }
 
-  // Insert each model response and remember the row ids
+  // Insert each model response — fail loudly on error
   const responseRows = responses.map((r, i) => ({
     conversation_id: conversationId,
     provider: r.provider,
@@ -155,10 +175,19 @@ export async function POST(req: NextRequest) {
     position: i,
   }));
 
-  const { data: insertedResponses } = await serviceClient
+  const { data: insertedResponses, error: insertError } = await serviceClient
     .from("model_responses")
     .insert(responseRows)
     .select("id, provider, model, position");
+
+  if (insertError || !insertedResponses) {
+    return NextResponse.json(
+      {
+        error: `Failed to save model responses: ${insertError?.message ?? "unknown"}`,
+      },
+      { status: 500 }
+    );
+  }
 
   // Log each response in usage_logs (skip errored ones)
   const usageLogs = responses
@@ -183,13 +212,17 @@ export async function POST(req: NextRequest) {
     await serviceClient.from("usage_logs").insert(usageLogs);
   }
 
-  // Map keys back to inserted row ids for scoring update + client return
+  // Map keys back to inserted row ids for scoring update + client return.
+  // Match by `position` (we wrote it deterministically above) — never trust insert
+  // return ordering.
   const idByKey = new Map<string, string>();
-  if (insertedResponses) {
-    for (let i = 0; i < responses.length; i++) {
-      const inserted = insertedResponses[i] as { id: string };
-      if (inserted) idByKey.set(responses[i].key, inserted.id);
-    }
+  const insertedByPosition = new Map<number, string>();
+  for (const row of insertedResponses as { id: string; position: number }[]) {
+    insertedByPosition.set(row.position, row.id);
+  }
+  for (let i = 0; i < responses.length; i++) {
+    const id = insertedByPosition.get(i);
+    if (id) idByKey.set(responses[i].key, id);
   }
 
   // ── Optional scoring pass ──────────────────────────────────────────────────
