@@ -45,6 +45,10 @@ artifacts/
       (app)/search/page.tsx                     # Global search — reads ?q from URL
       (app)/search/search-client.tsx            # Debounced search client w/ seq guard + AbortController + URL sync
       api/search/route.ts                       # GET ?q= → calls search_user_content RPC, returns grouped results
+      api/syntheses/[id]/share/route.ts         # POST → mints (or reuses) share_token + sets is_public=true
+      api/syntheses/[id]/unshare/route.ts       # POST → flips is_public=false (preserves share_token)
+      share/[token]/page.tsx                    # PUBLIC route — no auth, displays synthesis by share_token + is_public=true
+    components/synthesis/share-dialog.tsx       # Toggle public/private + copy link UI
       (app)/teams/                # AI Teams CRUD (server component, force-dynamic)
         actions.ts                # createTeam, updateTeam, deleteTeam, listTeams, generateStarterTeams
         page.tsx                  # Auto-generates starter teams when 2+ providers + 0 teams
@@ -89,6 +93,7 @@ artifacts/
       008_compare_tables.sql      # model_responses + syntheses tables, conversations.mode ← run manually
       009_conversations_soft_delete.sql  # conversations.deleted_at + partial indexes ← run manually
       010_project_memory.sql      # project_memory table + RLS + auto-bump updated_at trigger ← run manually
+      011_shareable_syntheses.sql # syntheses.share_token + is_public + anon column-level grants ← run manually
 ```
 
 ## Environment Variables
@@ -118,6 +123,7 @@ Helpers: `getModelById(provider, modelId)`, `getModelDisplayName(provider, model
 - **Teams soft delete**: `ai_teams.deleted_at` — never hard-delete; `listTeams` filters `IS NULL`
 - **Teams auto-generation**: `/teams` server component calls `generateStarterTeams()` on first load when 2+ providers connected and 0 teams exist
 - **Middleware auth guard**: protects `/dashboard /projects /chat /compare /synthesis /teams /settings /usage /admin /search`
+- **Shareable synthesis links**: `syntheses.share_token uuid` (unique) + `is_public bool` (default false). Public route `/share/[token]` reads via service-role client with strict `share_token=$1 AND is_public=true` filter — no auth required. Anon role gets column-level SELECT on a *whitelist* (id, prompt, content, provider, model, tone, source_response_ids, created_at, is_public) — `share_token` deliberately excluded so direct supabase-js queries from the browser cannot enumerate tokens (token possession is the secret). Unshare flips `is_public=false` but PRESERVES `share_token` so re-enabling reuses the same URL. Share/unshare routes verify ownership via service-role + explicit user_id check
 - **Global Search**: `/api/search?q=` calls Supabase RPC `search_user_content(search_query text)` under user auth context (RLS-scoped). Returns flat array of `{type, id, title, snippet, project_id, project_name, updated_at, rank}` rows, normalised defensively in `lib/search/types.ts#normaliseRow`. UI surfaces in two places: `/search` page (debounced 220ms, AbortController per request, monotonic seq guard, URL `?q=` synced via `history.replaceState`) and ⌘K command palette (`components/layout/command-palette.tsx` — debounced 180ms, top-6 per group, "View all → /search" footer). Header search button expands inline input that submits to `/search?q=`
 - **5 providers**: openai, anthropic, google, xai, custom (any OpenAI-compatible endpoint)
 - **Compare SSE multiplex**: `/api/compare` runs all team members in parallel via `Promise.all`, emits a single `text/event-stream` with `{type, key, ...}` envelopes (`start` / `chunk` / `done` / `error` / `all_done`); client parses by `\n\n` and routes by `key` to per-card state
