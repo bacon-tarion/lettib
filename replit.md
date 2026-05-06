@@ -57,7 +57,12 @@ artifacts/
         page.tsx                  # Async server component — fetches connections + user
         settings-content.tsx      # Client tabs component
       (app)/usage/                # Token usage & cost
-      (app)/admin/                # Admin panel
+      admin/                      # Admin dashboard (OUTSIDE (app) group → own layout)
+        layout.tsx                # requireAdmin gate + AdminSidebar
+        page.tsx                  # Overview tiles (users, signups, DAU, convs, syntheses, tokens, cost)
+        users/page.tsx            # Users table + email search + 25/page pagination
+        usage/page.tsx            # By-provider, by-day (30d), top-10 users
+      api/admin/stats/route.ts    # JSON overview endpoint (404 for non-admins)
       (marketing)/                # Landing page + pricing/privacy/terms/roadmap
     components/
       ui/                         # shadcn/ui primitives
@@ -80,6 +85,8 @@ artifacts/
       conversations/queries.ts    # listConversationsForUser — counts + cost aggregation
       memory/fields.ts            # MEMORY_FIELDS catalog + MemoryRow type + isMemoryFieldKey
       memory/queries.ts           # loadProjectMemory + upsertMemoryFields (ownership-checked)
+      admin/auth.ts               # requireAdmin → notFound() (NEVER 403) + isAdminEmail
+      admin/queries.ts            # getOverviewStats + listAdminUsers + getUsageBreakdown (service-role)
       search/types.ts             # SearchResult shape + normaliseRow + groupResults + hrefForResult
       prompts/memory.ts           # MEMORY_INJECTION_PROMPT (re-export) + MEMORY_EXTRACTION_PROMPT
     supabase/migrations/
@@ -94,6 +101,7 @@ artifacts/
       009_conversations_soft_delete.sql  # conversations.deleted_at + partial indexes ← run manually
       010_project_memory.sql      # project_memory table + RLS + auto-bump updated_at trigger ← run manually
       011_shareable_syntheses.sql # syntheses.share_token + is_public + anon column-level grants ← run manually
+      012_admin_grants.sql        # GRANT SELECT on profiles to service_role + usage_logs/conv indexes ← run manually
 ```
 
 ## Environment Variables
@@ -133,6 +141,7 @@ Helpers: `getModelById(provider, modelId)`, `getModelDisplayName(provider, model
 - **Conversation mutations**: `/api/conversations/[id]` PATCH validates destination project ownership before reassigning project_id; DELETE is soft (sets deleted_at). All routes use service-role client + explicit user_id ownership check
 - **Project Memory**: 6-field column schema (project_goal, important_decisions, user_preferences, key_facts, open_questions, next_steps) on `project_memory`, primary key = project_id. `lib/memory/fields.ts` is the single source of truth for field labels/keys; `isMemoryFieldKey()` allowlist gates every PATCH to prevent column-name injection. UI auto-saves per-field on blur via `/api/memory/[projectId]` PATCH. Memory toggle uses new `toggleProjectMemory` server action in `app/(app)/projects/[id]/actions.ts` (separate from project CRUD actions in `app/(app)/projects/actions.ts`)
 - **Memory auto-extraction**: After `/api/synthesis` saves a synthesis, if the project has `memory_enabled=true`, runs MEMORY_EXTRACTION_PROMPT through the same model/key used for synthesis. Returns strict JSON of changed fields only — best-effort, never fails the synthesis. JSON parsing strips markdown fences and falls back to the outermost `{...}` substring if the model wraps the object in prose. Append semantics for `important_decisions`/`key_facts` are enforced by prompt instruction, NOT server-side merge — if the model omits prior content, history is lost (acceptable v1 risk; future: server-side append). Memory form auto-save uses a per-field monotonic write counter to prevent out-of-order PATCH responses from overwriting newer content. Logged to `usage_logs` with `action='memory_extraction'`
+- **Admin dashboard**: `/admin/*` lives OUTSIDE `(app)` route group so it gets its own dedicated layout (the main app sidebar would otherwise nest in). Gated via `requireAdmin()` in `lib/admin/auth.ts` which calls `notFound()` (NOT 403) when ALLOWED_ADMIN_EMAILS is missing/empty or the user's email isn't allowlisted — existence is never disclosed. All admin reads use the service-role client (`lib/admin/queries.ts`); inputs are clamped (`page` 1-1000, `pageSize` 1-100, search 200 chars max) and ILIKE `%`/`_` are escaped. Aggregations are done in JS over capped row pulls (overview: 100k usage rows, usage page: 200k over 30d) — acceptable for v1; revisit when row counts approach caps. `/api/admin/stats` translates `notFound()` digests into JSON 404 but rethrows other errors so genuine failures aren't masked
 - **Vercel deployment**: Node.js server mode, no static export
 
 ## Development Commands
