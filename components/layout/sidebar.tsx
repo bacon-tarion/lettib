@@ -12,9 +12,8 @@ import {
   Settings,
   LogOut,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { mockUser } from "@/lib/mockData";
+import { signOut } from "@/app/actions/auth";
 
 const navItems = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
@@ -22,17 +21,23 @@ const navItems = [
   { href: "/compare", label: "Compare", icon: GitCompare },
   { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/teams", label: "Teams", icon: Users },
-  { href: "/usage", label: "Usage", icon: BarChart2 },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/usage", label: "Usage", icon: BarChart2 },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  userEmail?: string;
+}
+
+export function Sidebar({ userEmail }: SidebarProps) {
   const pathname = usePathname();
 
   return (
     <aside className="hidden md:flex flex-col fixed left-0 top-0 h-screen w-60 border-r bg-sidebar z-40">
       <div className="px-5 py-4 border-b">
-        <span className="text-xl font-bold tracking-tight text-sidebar-foreground">LettiB</span>
+        <span className="text-xl font-bold tracking-tight text-sidebar-foreground">
+          LettiB
+        </span>
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
@@ -60,11 +65,18 @@ export function Sidebar() {
       </nav>
 
       <div className="p-4 border-t space-y-2">
-        <p className="text-xs text-muted-foreground truncate">{mockUser.email}</p>
-        <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground">
-          <LogOut className="h-3.5 w-3.5" />
-          Log out
-        </Button>
+        {userEmail && (
+          <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
+        )}
+        <form action={signOut}>
+          <button
+            type="submit"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            Log out
+          </button>
+        </form>
       </div>
     </aside>
   );
