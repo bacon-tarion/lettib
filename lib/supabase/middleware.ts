@@ -54,6 +54,7 @@ export async function updateSession(request: NextRequest) {
     "/settings",
     "/usage",
     "/admin",
+    "/search",
   ];
 
   const isProtected = protectedRoutes.some((route) =>
