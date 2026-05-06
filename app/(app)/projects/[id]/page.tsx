@@ -1,5 +1,7 @@
 "use client";
 
+import { useState, useEffect } from "react";
+import Link from "next/link";
 import { mockProjects, mockSyntheses } from "@/lib/mockData";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +10,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Brain, MessageSquare } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Brain, GitCompare, MessageSquare } from "lucide-react";
+import { listTeams } from "@/app/(app)/teams/actions";
+import { updateProject } from "@/app/(app)/projects/actions";
+import type { Team } from "@/app/(app)/teams/actions";
+
+type RecentChat = {
+  id: string;
+  title: string;
+  mode: "chat" | "compare";
+  provider: string | null;
+  model: string | null;
+  message_count: number;
+  cost_usd: number;
+  updated_at: string;
+};
 
 const MEMORY_FIELDS = [
   "Project Goal",
@@ -28,12 +51,6 @@ const MOCK_MEMORY_VALUES: Record<string, string> = {
   "Next Steps": "Finish shell, wire Supabase, implement real AI calls.",
 };
 
-const MOCK_CHATS = [
-  { id: "c-1", title: "Best tech stack for solo SaaS", model: "claude-opus-4-7", preview: "TypeScript with Next.js is the strongest default…", updated_at: "2026-05-05T09:00:00Z" },
-  { id: "c-2", title: "Server vs client components", model: "claude-sonnet-4-6", preview: "Use server components by default, client only when…", updated_at: "2026-05-04T11:00:00Z" },
-  { id: "c-3", title: "Supabase RLS strategy", model: "gpt-5.4", preview: "Enable RLS on every table. Use policies tied to auth.uid()…", updated_at: "2026-05-03T15:30:00Z" },
-];
-
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("en-US", {
     month: "short",
@@ -44,6 +61,44 @@ function formatDate(dateStr: string) {
 export default function ProjectPage({ params }: { params: { id: string } }) {
   const project = mockProjects.find((p) => p.id === params.id) ?? mockProjects[0];
   const syntheses = mockSyntheses.filter((s) => s.project_id === project.id);
+
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState<string>(project.default_ai_team ?? "none");
+  const [teamSaving, setTeamSaving] = useState(false);
+  const [recentChats, setRecentChats] = useState<RecentChat[]>([]);
+  const [chatsLoading, setChatsLoading] = useState(true);
+
+  useEffect(() => {
+    listTeams()
+      .then(setTeams)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setChatsLoading(true);
+    fetch(`/api/conversations?project_id=${params.id}&limit=5`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) setRecentChats(data.conversations ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setRecentChats([]);
+      })
+      .finally(() => {
+        if (!cancelled) setChatsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [params.id]);
+
+  async function handleTeamChange(value: string) {
+    setSelectedTeam(value);
+    setTeamSaving(true);
+    await updateProject(project.id, { default_ai_team: value === "none" ? "solo" : value });
+    setTeamSaving(false);
+  }
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -70,23 +125,54 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         </TabsList>
 
         <TabsContent value="chats" className="mt-4 space-y-2">
-          {MOCK_CHATS.map((chat) => (
-            <Card key={chat.id} className="hover:shadow-sm transition-shadow cursor-pointer">
-              <CardContent className="py-3 px-4 flex items-center gap-3">
-                <div className="rounded-md bg-muted p-2 shrink-0">
-                  <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{chat.title}</p>
-                  <p className="text-xs text-muted-foreground truncate">{chat.preview}</p>
-                </div>
-                <div className="shrink-0 text-right space-y-1">
-                  <Badge variant="secondary" className="text-xs block">{chat.model}</Badge>
-                  <span className="text-xs text-muted-foreground">{formatDate(chat.updated_at)}</span>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+          {chatsLoading ? (
+            <p className="text-muted-foreground text-sm py-4">Loading…</p>
+          ) : recentChats.length === 0 ? (
+            <p className="text-muted-foreground text-sm py-4">
+              No conversations in this project yet.
+            </p>
+          ) : (
+            <>
+              {recentChats.map((chat) => {
+                const Icon = chat.mode === "compare" ? GitCompare : MessageSquare;
+                return (
+                  <Link key={chat.id} href={`/chat/${chat.id}`}>
+                    <Card className="hover:shadow-sm transition-shadow cursor-pointer">
+                      <CardContent className="py-3 px-4 flex items-center gap-3">
+                        <div className="rounded-md bg-muted p-2 shrink-0">
+                          <Icon className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{chat.title}</p>
+                          <p className="text-xs text-muted-foreground tabular-nums">
+                            {chat.message_count} msg · ${chat.cost_usd.toFixed(4)}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right space-y-1">
+                          {chat.model && (
+                            <Badge variant="secondary" className="text-xs block">
+                              {chat.model}
+                            </Badge>
+                          )}
+                          <span className="text-xs text-muted-foreground">
+                            {formatDate(chat.updated_at)}
+                          </span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                );
+              })}
+              <div className="pt-2 text-right">
+                <Link
+                  href={`/projects/${params.id}/chats`}
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                >
+                  View all conversations →
+                </Link>
+              </div>
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="syntheses" className="mt-4">
@@ -137,10 +223,33 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
             <Label>Project Name</Label>
             <Input defaultValue={project.name} />
           </div>
+
           <div className="space-y-1.5">
             <Label>Default AI Team</Label>
-            <Input defaultValue={project.default_ai_team} />
+            <Select value={selectedTeam} onValueChange={handleTeamChange} disabled={teamSaving}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select a team…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No team (solo mode)</SelectItem>
+                {teams.map((team) => (
+                  <SelectItem key={team.id} value={team.id}>
+                    {team.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {teams.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                Create AI Teams on the{" "}
+                <a href="/teams" className="underline underline-offset-2">
+                  Teams page
+                </a>{" "}
+                to assign them here.
+              </p>
+            )}
           </div>
+
           <div className="space-y-1.5">
             <Label>Memory</Label>
             <div className="flex items-center gap-2">
@@ -150,6 +259,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
               <span className="text-xs text-muted-foreground">Toggle coming soon</span>
             </div>
           </div>
+
           <div className="border-t pt-4 space-y-2">
             <p className="text-sm font-medium text-destructive">Danger Zone</p>
             <Button variant="destructive" disabled size="sm">
