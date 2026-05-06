@@ -3,10 +3,11 @@ import { MessageSquare, GitCompare, FolderPlus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ProjectCard } from "@/components/projects/project-card";
-import { mockUser, mockProjects, mockUsage } from "@/lib/mockData";
+import { mockUser, mockProjects } from "@/lib/mockData";
 import { createClient } from "@/lib/supabase/server";
 import { listConversationsForUser } from "@/lib/conversations/queries";
-import { getModelDisplayName } from "@/lib/providers/models";
+import { getModelDisplayName, getProviderLabel } from "@/lib/providers/models";
+import { getUserUsageSnapshot } from "@/lib/usage/queries";
 
 function formatRelative(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -45,6 +46,7 @@ export default async function DashboardPage() {
   let recentActivity: Awaited<
     ReturnType<typeof listConversationsForUser>
   > = [];
+  let snapshot: Awaited<ReturnType<typeof getUserUsageSnapshot>> = null;
 
   const supabase = await createClient();
   const {
@@ -57,7 +59,7 @@ export default async function DashboardPage() {
       user.email?.split("@")[0] ??
       "there";
 
-    const [{ data: pinnedData }, recent] = await Promise.all([
+    const [{ data: pinnedData }, recent, snap] = await Promise.all([
       supabase
         .from("projects")
         .select("*")
@@ -67,12 +69,14 @@ export default async function DashboardPage() {
         .order("updated_at", { ascending: false })
         .limit(4),
       listConversationsForUser({ userId: user.id, limit: 8 }),
+      getUserUsageSnapshot(),
     ]);
 
     if (pinnedData && pinnedData.length > 0) {
       pinnedProjects = pinnedData;
     }
     recentActivity = recent;
+    snapshot = snap;
   }
 
   return (
@@ -174,49 +178,74 @@ export default async function DashboardPage() {
         </div>
 
         <div className="space-y-4">
-          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-            Usage Snapshot
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Usage this week
+            </h2>
+            <Link
+              href="/usage"
+              className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              View all →
+            </Link>
+          </div>
           <Card>
             <CardContent className="pt-4 space-y-4">
               <div className="flex justify-between items-center">
-                <span className="text-xs text-muted-foreground">Today</span>
-                <span className="font-semibold text-sm">
-                  ${mockUsage.today_usd.toFixed(2)}
+                <span className="text-xs text-muted-foreground">Tokens (7d)</span>
+                <span className="font-semibold text-sm tabular-nums">
+                  {(snapshot?.week_tokens ?? 0).toLocaleString()}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-xs text-muted-foreground">This month</span>
-                <span className="font-semibold text-sm">
-                  ${mockUsage.month_usd.toFixed(2)}
+                <span className="text-xs text-muted-foreground">Cost (7d)</span>
+                <span className="font-semibold text-sm tabular-nums">
+                  ${(snapshot?.week_cost_usd ?? 0).toFixed(4)}
                 </span>
               </div>
-              <div className="pt-1 space-y-3">
-                {mockUsage.by_provider.map((p) => {
-                  const pct = Math.round(
-                    (p.month_usd / mockUsage.month_usd) * 100
-                  );
-                  return (
-                    <div key={p.provider} className="space-y-1">
-                      <div className="flex justify-between text-xs">
-                        <span>{p.label}</span>
-                        <span className="text-muted-foreground">
-                          ${p.month_usd.toFixed(2)}
-                        </span>
-                      </div>
-                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${pct}%`,
-                            backgroundColor: p.color,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-muted-foreground">
+                  Most-used provider
+                </span>
+                <span className="font-semibold text-sm">
+                  {snapshot?.top_provider
+                    ? getProviderLabel(snapshot.top_provider)
+                    : "—"}
+                </span>
               </div>
+              {snapshot && snapshot.by_provider_week.length > 0 && (
+                <div className="pt-1 space-y-2 border-t mt-2">
+                  {snapshot.by_provider_week.slice(0, 4).map((p) => {
+                    const pct = snapshot.week_cost_usd
+                      ? Math.max(
+                          2,
+                          Math.round((p.cost_usd / snapshot.week_cost_usd) * 100)
+                        )
+                      : 0;
+                    return (
+                      <div key={p.provider} className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span>{getProviderLabel(p.provider)}</span>
+                          <span className="text-muted-foreground tabular-nums">
+                            ${p.cost_usd.toFixed(4)}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-primary/70"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {(!snapshot || snapshot.week_tokens === 0) && (
+                <p className="text-[11px] text-muted-foreground text-center pt-1">
+                  No usage in the last 7 days.
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>
