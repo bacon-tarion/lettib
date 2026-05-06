@@ -21,13 +21,33 @@ export const MODELS_CATALOG = {
     { id: 'grok-4.1', name: 'Grok 4.1', context: 256000, cost_in: 0.20, cost_out: 0.50  },
     { id: 'grok-4',   name: 'Grok 4',   context: 256000, cost_in: 3.00, cost_out: 15.00 },
   ],
+  custom: [
+    { id: 'custom', name: 'Custom Model', context: 128000, cost_in: 0, cost_out: 0 },
+  ],
 } as const;
 
 export type Provider = keyof typeof MODELS_CATALOG;
-export type ModelEntry = typeof MODELS_CATALOG[Provider][number];
+export type ModelEntry = {
+  readonly id: string;
+  readonly name: string;
+  readonly context: number;
+  readonly cost_in: number;
+  readonly cost_out: number;
+};
 
 export const DEFAULT_TEAM_MODELS = {
   research:   ['gpt-5.4', 'claude-opus-4-7', 'gemini-3.1-pro'],
   coding:     ['claude-sonnet-4-6', 'gpt-5.4'],
   brainstorm: ['claude-opus-4-7', 'gpt-5.4', 'grok-4.1'],
 } as const;
+
+export function getProviderLabel(provider: string): string {
+  const labels: Record<string, string> = {
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    google: 'Google',
+    xai: 'xAI',
+    custom: 'Custom',
+  };
+  return labels[provider] ?? provider;
+}
