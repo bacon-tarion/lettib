@@ -113,17 +113,15 @@ export default function MarketingHomePage() {
             answers into one. Organize everything into projects with memory.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Link href="/signup">
-              <Button size="lg" className="gap-2 w-full sm:w-auto">
+            <Button asChild size="lg" className="gap-2 w-full sm:w-auto">
+              <Link href="/signup">
                 Get started free
                 <ArrowRight className="h-4 w-4" />
-              </Button>
-            </Link>
-            <Link href="#how">
-              <Button size="lg" variant="outline" className="w-full sm:w-auto">
-                See how it works
-              </Button>
-            </Link>
+              </Link>
+            </Button>
+            <Button asChild size="lg" variant="outline" className="w-full sm:w-auto">
+              <Link href="#how">See how it works</Link>
+            </Button>
           </div>
           <p className="mt-4 text-xs text-muted-foreground">
             BYOK · No credit card required · Free forever plan
@@ -261,12 +259,12 @@ export default function MarketingHomePage() {
             Bring your keys, run your first compare in under a minute, and see
             the difference a real multi-AI workspace makes.
           </p>
-          <Link href="/signup">
-            <Button size="lg" className="gap-2">
+          <Button asChild size="lg" className="gap-2">
+            <Link href="/signup">
               Try LettiB
               <ArrowRight className="h-4 w-4" />
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </div>
       </section>
     </>
