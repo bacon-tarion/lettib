@@ -137,7 +137,7 @@ export default function MarketingHomePage() {
           </h2>
           <p className="mx-auto max-w-2xl text-muted-foreground text-base sm:text-lg">
             ChatGPT in one tab. Claude in another. Gemini for that one thing.
-            Notes in a doc you'll never find again. Every answer half-right,
+            Notes in a doc you&apos;ll never find again. Every answer half-right,
             none of them together. LettiB pulls it all into one workspace —
             compare, synthesize, save.
           </p>
