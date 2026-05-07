@@ -37,11 +37,11 @@ export default function PrivacyPage() {
         </li>
       </ul>
 
-      <h2>What we don't do</h2>
+      <h2>What we don&apos;t do</h2>
       <ul>
-        <li>We don't sell your data.</li>
-        <li>We don't train models on your prompts or responses.</li>
-        <li>We don't expose your API keys to the browser.</li>
+        <li>We don&apos;t sell your data.</li>
+        <li>We don&apos;t train models on your prompts or responses.</li>
+        <li>We don&apos;t expose your API keys to the browser.</li>
       </ul>
 
       <h2>Third parties</h2>
