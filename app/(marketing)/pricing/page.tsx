@@ -43,12 +43,12 @@ export default function PricingPage() {
             The Free plan never expires. Try every model side by side, generate
             syntheses, and upgrade only when you outgrow it.
           </p>
-          <Link href="/signup">
-            <Button size="lg" className="gap-2">
+          <Button asChild size="lg" className="gap-2">
+            <Link href="/signup">
               Start free
               <ArrowRight className="h-4 w-4" />
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </div>
       </section>
     </>
