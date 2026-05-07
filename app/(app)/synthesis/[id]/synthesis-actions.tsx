@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ReactNode } from "react";
 import {
   Copy,
@@ -37,13 +37,21 @@ export function SynthesisActions({
   initialFeedback,
   shareSlot,
 }: SynthesisActionsProps) {
-  const [thumbs, setThumbs] = useState<Thumb | null>(thumbForScore(initialScore));
-  const [feedback, setFeedback] = useState(initialFeedback ?? "");
+  // Baseline = last successfully persisted state. Tracked locally so re-rates
+  // update the dirty check without needing a refetch.
+  const [baselineThumb, setBaselineThumb] = useState<Thumb | null>(
+    thumbForScore(initialScore)
+  );
+  const [baselineFeedback, setBaselineFeedback] = useState<string>(
+    initialFeedback ?? ""
+  );
+
+  const [thumbs, setThumbs] = useState<Thumb | null>(baselineThumb);
+  const [feedback, setFeedback] = useState<string>(baselineFeedback);
+
   const [copied, setCopied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [submittedAt, setSubmittedAt] = useState<number | null>(
-    initialScore != null ? Date.now() : null
-  );
+  const [justSavedAt, setJustSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleCopy() {
@@ -52,30 +60,38 @@ export function SynthesisActions({
     setTimeout(() => setCopied(false), 2000);
   }
 
-  function pickThumb(t: Thumb) {
-    setThumbs(t);
-    setSubmittedAt(null);
-    setError(null);
-  }
+  const isDirty = useMemo(
+    () => thumbs !== baselineThumb || feedback.trim() !== baselineFeedback.trim(),
+    [thumbs, feedback, baselineThumb, baselineFeedback]
+  );
+
+  const hasBaseline = baselineThumb !== null;
+  // Enable submit whenever a thumb is selected and either nothing's been saved
+  // yet OR the user changed something since the last save.
+  const canSubmit = thumbs !== null && (isDirty || !hasBaseline) && !submitting;
 
   async function handleSubmit() {
     if (!thumbs) return;
     setSubmitting(true);
     setError(null);
     try {
+      const trimmed = feedback.trim();
       const res = await fetch(`/api/syntheses/${synthesisId}/rate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           rating: thumbs === "up" ? 5 : 1,
-          feedback: feedback.trim() || null,
+          feedback: trimmed || null,
         }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error ?? `Failed (${res.status})`);
       }
-      setSubmittedAt(Date.now());
+      // Sync baseline to current state so subsequent edits are detectable.
+      setBaselineThumb(thumbs);
+      setBaselineFeedback(trimmed);
+      setJustSavedAt(Date.now());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to submit rating");
     } finally {
@@ -84,7 +100,6 @@ export function SynthesisActions({
   }
 
   const showFeedback = thumbs !== null;
-  const isRated = submittedAt !== null;
 
   return (
     <>
@@ -96,7 +111,7 @@ export function SynthesisActions({
             variant={thumbs === "up" ? "default" : "outline"}
             size="sm"
             className="gap-1.5"
-            onClick={() => pickThumb("up")}
+            onClick={() => setThumbs("up")}
             disabled={submitting}
           >
             <ThumbsUp className="h-4 w-4" />
@@ -106,16 +121,16 @@ export function SynthesisActions({
             variant={thumbs === "down" ? "destructive" : "outline"}
             size="sm"
             className="gap-1.5"
-            onClick={() => pickThumb("down")}
+            onClick={() => setThumbs("down")}
             disabled={submitting}
           >
             <ThumbsDown className="h-4 w-4" />
             Not helpful
           </Button>
-          {isRated && (
+          {hasBaseline && !isDirty && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <Check className="h-3.5 w-3.5 text-green-600" />
-              Rated
+              {justSavedAt ? "Saved" : "Rated"}
             </span>
           )}
         </div>
@@ -133,23 +148,16 @@ export function SynthesisActions({
               }
               className="resize-none h-20 text-sm"
               value={feedback}
-              onChange={(e) => {
-                setFeedback(e.target.value);
-                if (isRated) setSubmittedAt(null);
-              }}
+              onChange={(e) => setFeedback(e.target.value)}
               maxLength={5000}
               disabled={submitting}
             />
             <div className="flex items-center gap-3">
-              <Button
-                size="sm"
-                onClick={handleSubmit}
-                disabled={submitting || isRated}
-              >
+              <Button size="sm" onClick={handleSubmit} disabled={!canSubmit}>
                 {submitting && (
                   <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                 )}
-                {isRated ? "Submitted" : "Submit feedback"}
+                {hasBaseline ? "Update rating" : "Submit feedback"}
               </Button>
               {error && <span className="text-xs text-red-600">{error}</span>}
             </div>
