@@ -81,7 +81,11 @@ export async function addApiKey(
   const validationError = validateKey(provider as ProviderValue, rawKey, options);
   if (validationError) return { success: false, error: validationError };
 
+  console.log("[addApiKey] Starting addApiKey for provider:", provider);
+
   const user = await requireUser();
+  console.log("[addApiKey] Authenticated user.id:", user.id);
+
   const serviceClient = createServiceClient();
   const keyLastFour = rawKey === "no-key" ? null : rawKey.slice(-4);
 
@@ -94,60 +98,71 @@ export async function addApiKey(
       .eq("provider", provider)
       .maybeSingle();
 
-    // Store the new key in Vault
-    const { data: secretData, error: vaultError } = await (
-      serviceClient.schema("vault") as ReturnType<typeof serviceClient.schema>
-    )
-      .from("secrets")
-      .insert({
-        secret: rawKey,
-        name: `lettib_${user.id}_${provider}_${Date.now()}`,
-      })
-      .select("id")
-      .single();
+    console.log("[addApiKey] Existing connection:", existing ? existing.id : "none");
 
-    if (vaultError || !secretData) {
+    // Store the new key via the public wrapper that calls vault.create_secret internally
+    const { data: newSecretId, error: vaultError } = await serviceClient.rpc(
+      "lettib_store_secret",
+      {
+        p_secret: rawKey,
+        p_name: `lettib_${user.id}_${provider}_${Date.now()}`,
+      }
+    );
+
+    console.log("[addApiKey] lettib_store_secret result — id:", newSecretId, "error:", vaultError);
+
+    if (vaultError || !newSecretId) {
+      console.error("[addApiKey] lettib_store_secret failed:", vaultError);
       return {
         success: false,
-        error:
-          "Failed to store key securely. Ensure the Vault extension is enabled in your Supabase project.",
+        error: "Failed to store key securely: " + (vaultError?.message ?? "unknown"),
       };
     }
 
     if (existing) {
       // Delete the old vault secret to avoid orphans
-      await (serviceClient.schema("vault") as ReturnType<typeof serviceClient.schema>)
-        .from("secrets")
-        .delete()
-        .eq("id", existing.vault_secret_id);
+      if (existing.vault_secret_id) {
+        await serviceClient.rpc("lettib_delete_secret", {
+          p_secret_id: existing.vault_secret_id,
+        });
+      }
 
       // Update the existing connection row
-      await serviceClient
+      const { data: updateData, error: updateError } = await serviceClient
         .from("api_connections")
         .update({
-          vault_secret_id: secretData.id,
+          vault_secret_id: newSecretId,
           key_last_four: keyLastFour,
           status: "untested",
           custom_base_url: options?.baseUrl ?? null,
           custom_model_name: options?.modelName ?? null,
         })
-        .eq("id", existing.id);
+        .eq("id", existing.id)
+        .select();
+
+      console.log("[addApiKey] UPDATE result:", updateData, "error:", updateError);
     } else {
       // Insert a new connection row
-      await serviceClient.from("api_connections").insert({
-        user_id: user.id,
-        provider,
-        vault_secret_id: secretData.id,
-        key_last_four: keyLastFour,
-        status: "untested",
-        custom_base_url: options?.baseUrl ?? null,
-        custom_model_name: options?.modelName ?? null,
-      });
+      const { data: insertData, error: insertError } = await serviceClient
+        .from("api_connections")
+        .insert({
+          user_id: user.id,
+          provider,
+          vault_secret_id: newSecretId,
+          key_last_four: keyLastFour,
+          status: "untested",
+          custom_base_url: options?.baseUrl ?? null,
+          custom_model_name: options?.modelName ?? null,
+        })
+        .select();
+
+      console.log("[addApiKey] INSERT result:", insertData, "error:", insertError);
     }
 
     revalidatePath("/settings");
     return { success: true, lastFour: keyLastFour ?? undefined };
   } catch (err) {
+    console.error("[addApiKey] Unexpected error:", err);
     return {
       success: false,
       error: err instanceof Error ? err.message : "An unexpected error occurred.",
@@ -173,19 +188,16 @@ export async function testApiKey(
   if (connection.user_id !== user.id)
     return { success: false, error: "Unauthorized." };
 
-  // Decrypt the raw key from Vault — never leaves the server
-  const { data: secretData } = await (
-    serviceClient.schema("vault") as ReturnType<typeof serviceClient.schema>
-  )
-    .from("decrypted_secrets")
-    .select("decrypted_secret")
-    .eq("id", connection.vault_secret_id)
-    .single();
+  // Decrypt the raw key via the public wrapper — never leaves the server
+  const { data: rawKey, error: readError } = await serviceClient.rpc(
+    "lettib_read_secret",
+    { p_secret_id: connection.vault_secret_id }
+  );
 
-  const rawKey = (secretData as { decrypted_secret?: string } | null)
-    ?.decrypted_secret ?? null;
-
-  if (!rawKey) return { success: false, error: "Could not decrypt API key." };
+  if (readError || !rawKey) {
+    console.error("[testApiKey] lettib_read_secret failed:", readError);
+    return { success: false, error: "Could not decrypt API key." };
+  }
 
   let testOk = false;
   let testError: string | undefined;
@@ -283,10 +295,9 @@ export async function deleteApiKey(
 
   // Then delete the vault secret so no orphaned encrypted data remains
   if (connection.vault_secret_id) {
-    await (serviceClient.schema("vault") as ReturnType<typeof serviceClient.schema>)
-      .from("secrets")
-      .delete()
-      .eq("id", connection.vault_secret_id);
+    await serviceClient.rpc("lettib_delete_secret", {
+      p_secret_id: connection.vault_secret_id,
+    });
   }
 
   revalidatePath("/settings");
@@ -295,23 +306,29 @@ export async function deleteApiKey(
 
 export async function listApiKeys(): Promise<ApiConnection[]> {
   try {
-    // Use the user-scoped client — RLS filters to the current user automatically
+    // Get the current user via the user-scoped client (for auth), then query
+    // via serviceClient to bypass RLS (which may not have a SELECT policy yet).
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) return [];
 
-    const { data, error } = await supabase
+    const serviceClient = createServiceClient();
+    const { data, error } = await serviceClient
       .from("api_connections")
       .select(
         "id, provider, status, key_last_four, last_tested_at, custom_base_url, custom_model_name"
       )
+      .eq("user_id", user.id)
       .order("provider");
+
+    console.log("[listApiKeys] user:", user.id, "rows:", data?.length ?? 0, "error:", error);
 
     if (error) return [];
     return (data ?? []) as ApiConnection[];
-  } catch {
+  } catch (err) {
+    console.error("[listApiKeys] unexpected error:", err);
     return [];
   }
 }
