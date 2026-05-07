@@ -51,3 +51,20 @@ export function getProviderLabel(provider: string): string {
   };
   return labels[provider] ?? provider;
 }
+
+export function getModelById(provider: string, modelId: string): ModelEntry | undefined {
+  const catalog = MODELS_CATALOG as Record<string, readonly ModelEntry[]>;
+  return catalog[provider]?.find((m) => m.id === modelId);
+}
+
+export function getModelDisplayName(provider: string, modelId: string): string {
+  return getModelById(provider, modelId)?.name ?? modelId;
+}
+
+export function getProviderForModel(modelId: string): string | undefined {
+  const catalog = MODELS_CATALOG as Record<string, readonly ModelEntry[]>;
+  for (const [provider, models] of Object.entries(catalog)) {
+    if (models.some((m) => m.id === modelId)) return provider;
+  }
+  return undefined;
+}
