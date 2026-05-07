@@ -18,9 +18,9 @@ export default function TermsPage() {
 
       <h2>The service</h2>
       <p>
-        LettiB ("we", "us") provides a multi-AI workspace for comparing,
+        LettiB (&quot;we&quot;, &quot;us&quot;) provides a multi-AI workspace for comparing,
         synthesizing, and organizing content from third-party AI model
-        providers. You ("you", "user") use the service at your own discretion
+        providers. You (&quot;you&quot;, &quot;user&quot;) use the service at your own discretion
         and risk.
       </p>
 
@@ -33,7 +33,7 @@ export default function TermsPage() {
         </li>
         <li>
           You may not use the service for illegal activity or to violate any
-          provider's terms.
+          provider&apos;s terms.
         </li>
       </ul>
 
@@ -46,7 +46,7 @@ export default function TermsPage() {
 
       <h2>No warranty</h2>
       <p>
-        The service is provided "as is" without warranty of any kind. We are
+        The service is provided &quot;as is&quot; without warranty of any kind. We are
         not responsible for the accuracy of any AI-generated content or for any
         decisions made based on it.
       </p>
