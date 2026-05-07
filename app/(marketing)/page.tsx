@@ -1,124 +1,275 @@
 import Link from "next/link";
-import { ArrowRight, GitCompare, Sparkles, FolderOpen } from "lucide-react";
+import {
+  ArrowRight,
+  GitCompare,
+  Sparkles,
+  FolderOpen,
+  KeyRound,
+  Users,
+  Brain,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { PricingGrid } from "./_components/pricing-grid";
 
-const VALUE_PROPS = [
+const FEATURES = [
+  {
+    icon: KeyRound,
+    title: "Connect your keys",
+    desc: "Bring your own OpenAI, Anthropic, Google, or xAI keys. Your usage, your costs — zero markup.",
+  },
+  {
+    icon: Users,
+    title: "AI Teams",
+    desc: "Group your favorite models into reusable teams (e.g. 'Research Trio', 'Code Review Squad').",
+  },
   {
     icon: GitCompare,
-    title: "Compare",
-    desc: "Run the same prompt across GPT-5, Claude, and Gemini simultaneously. See every answer side by side.",
+    title: "Compare Mode",
+    desc: "Send one prompt to multiple models in parallel. See every answer side by side, in real time.",
   },
   {
     icon: Sparkles,
-    title: "Synthesize",
-    desc: "Let LettiB merge the best parts of every response into one authoritative answer.",
+    title: "LettiB Synthesis",
+    desc: "Merge the best parts of every response into one authoritative answer, scored and sourced.",
   },
   {
     icon: FolderOpen,
-    title: "Organize",
-    desc: "Save chats, comparisons, and syntheses into projects. Build a knowledge base that compounds.",
+    title: "Project folders",
+    desc: "Organize chats, comparisons, and syntheses into projects. Build a knowledge base that compounds.",
+  },
+  {
+    icon: Brain,
+    title: "Project Memory",
+    desc: "Capture goals, decisions, preferences, and facts. LettiB carries context from one prompt to the next.",
   },
 ];
 
-const HOW_IT_WORKS = [
+const STEPS = [
   {
-    step: "1",
-    title: "Bring your API keys",
-    desc: "Connect OpenAI, Anthropic, Google, or xAI. Your keys, your costs — no markup.",
+    n: "01",
+    title: "Connect",
+    desc: "Add your provider API keys once. Encrypted at rest, only the last 4 chars ever leave the server.",
   },
   {
-    step: "2",
-    title: "Run a Compare",
-    desc: "Type a prompt, select your AI Team, and see all responses in under a second.",
+    n: "02",
+    title: "Compare",
+    desc: "Pick a Team, type your prompt, and watch every model stream their answer in parallel.",
   },
   {
-    step: "3",
-    title: "Create a Synthesis",
+    n: "03",
+    title: "Synthesize",
     desc: "One click merges the best ideas into a single, rated answer saved to your project.",
+  },
+];
+
+const FAQ = [
+  {
+    q: "Do you store my API keys?",
+    a: "Yes — encrypted in Supabase Vault and decrypted server-side only when needed for a request. We never expose them to the browser, and you can revoke them anytime from Settings.",
+  },
+  {
+    q: "Whose API costs am I paying?",
+    a: "Yours. LettiB is BYOK — you bring your own provider keys, and you pay the providers directly. We charge a flat monthly subscription for the workspace, with zero usage markup.",
+  },
+  {
+    q: "Which models are supported?",
+    a: "OpenAI (GPT-5, o-series), Anthropic (Claude Sonnet & Opus), Google (Gemini), and xAI (Grok). Custom OpenAI-compatible endpoints work too.",
+  },
+  {
+    q: "What is a Synthesis?",
+    a: "After a Compare, LettiB sends every model's response to a synthesizer model that produces one merged answer with the best of each — sourced, scored, and saved to your project.",
+  },
+  {
+    q: "Can I share my work?",
+    a: "Yes. Any synthesis can be made public via a unique share link. Read-only — your account and other syntheses stay private.",
+  },
+  {
+    q: "Is there a free plan?",
+    a: "Yes. The Free plan is BYOK, unlimited providers, with up to 3-model compare and 10 syntheses per month. No credit card required.",
   },
 ];
 
 export default function MarketingHomePage() {
   return (
-    <div className="min-h-screen bg-background">
-      <section className="flex flex-col items-center justify-center text-center px-4 pt-24 pb-20 max-w-3xl mx-auto">
-        <h1 className="text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-6">
-          Your AI work, finally organized.
-        </h1>
-        <p className="text-lg text-muted-foreground mb-8 max-w-xl">
-          Compare GPT-5, Claude, and Gemini side by side. Merge the best parts into
-          one answer. Save everything into projects.
-        </p>
-        <div className="flex gap-3 flex-wrap justify-center">
-          <Link href="/signup">
-            <Button size="lg" className="gap-2">
-              Join the beta
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </Link>
-          <Link href="#how-it-works">
-            <Button size="lg" variant="outline">
-              See how it works
-            </Button>
-          </Link>
+    <>
+      {/* Hero */}
+      <section className="relative overflow-hidden">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_0%,hsl(var(--primary)/0.12),transparent_70%)]"
+        />
+        <div className="relative mx-auto max-w-4xl px-4 pt-20 pb-16 text-center">
+          <Badge variant="secondary" className="mb-6 rounded-full px-3 py-1 text-xs">
+            <Sparkles className="h-3 w-3 mr-1.5 inline" />
+            Multi-AI workspace · Now in beta
+          </Badge>
+          <h1 className="text-4xl sm:text-6xl font-bold tracking-tight leading-[1.05] mb-6">
+            One workspace for every AI you use.
+          </h1>
+          <p className="mx-auto max-w-2xl text-lg sm:text-xl text-muted-foreground mb-8">
+            Compare GPT, Claude, Gemini, and Grok side by side. Merge the best
+            answers into one. Organize everything into projects with memory.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <Link href="/signup">
+              <Button size="lg" className="gap-2 w-full sm:w-auto">
+                Get started free
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
+            <Link href="#how">
+              <Button size="lg" variant="outline" className="w-full sm:w-auto">
+                See how it works
+              </Button>
+            </Link>
+          </div>
+          <p className="mt-4 text-xs text-muted-foreground">
+            BYOK · No credit card required · Free forever plan
+          </p>
         </div>
       </section>
 
-      <section className="px-4 py-16 max-w-4xl mx-auto">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          {VALUE_PROPS.map((v) => {
-            const Icon = v.icon;
-            return (
-              <Card key={v.title} className="text-center">
-                <CardHeader className="pb-2">
-                  <div className="mx-auto rounded-full bg-muted p-3 w-fit mb-2">
-                    <Icon className="h-5 w-5" />
-                  </div>
-                  <CardTitle className="text-base">{v.title}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">{v.desc}</p>
-                </CardContent>
-              </Card>
-            );
-          })}
+      {/* Problem */}
+      <section className="border-t bg-muted/30">
+        <div className="mx-auto max-w-4xl px-4 py-16 text-center">
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">
+            Your AI work is scattered across 5 tabs.
+          </h2>
+          <p className="mx-auto max-w-2xl text-muted-foreground text-base sm:text-lg">
+            ChatGPT in one tab. Claude in another. Gemini for that one thing.
+            Notes in a doc you'll never find again. Every answer half-right,
+            none of them together. LettiB pulls it all into one workspace —
+            compare, synthesize, save.
+          </p>
         </div>
       </section>
 
-      <section id="how-it-works" className="px-4 py-16 bg-muted/30">
-        <div className="max-w-3xl mx-auto">
-          <h2 className="text-2xl font-bold text-center mb-10">How it works</h2>
-          <div className="space-y-6">
-            {HOW_IT_WORKS.map((step) => (
-              <div key={step.step} className="flex gap-4 items-start">
-                <div className="h-9 w-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-sm shrink-0">
-                  {step.step}
-                </div>
-                <div>
-                  <p className="font-semibold">{step.title}</p>
-                  <p className="text-sm text-muted-foreground mt-0.5">{step.desc}</p>
-                </div>
+      {/* Features */}
+      <section id="features" className="border-t">
+        <div className="mx-auto max-w-6xl px-4 py-20">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-3">
+              Everything you need to run multi-AI workflows.
+            </h2>
+            <p className="text-muted-foreground">
+              Six features. Zero context switching.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {FEATURES.map((f) => {
+              const Icon = f.icon;
+              return (
+                <Card key={f.title} className="border-border/60">
+                  <CardContent className="pt-6 pb-6 space-y-3">
+                    <div className="inline-flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 text-primary">
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <h3 className="font-semibold">{f.title}</h3>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      {f.desc}
+                    </p>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* How it works */}
+      <section id="how" className="border-t bg-muted/30">
+        <div className="mx-auto max-w-5xl px-4 py-20">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-3">
+              Three steps. One smarter answer.
+            </h2>
+          </div>
+          <div className="grid gap-6 sm:grid-cols-3">
+            {STEPS.map((s) => (
+              <div
+                key={s.n}
+                className="rounded-lg border bg-background p-6 space-y-3"
+              >
+                <span className="text-sm font-mono font-semibold text-primary">
+                  {s.n}
+                </span>
+                <h3 className="text-lg font-semibold">{s.title}</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  {s.desc}
+                </p>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      <footer className="border-t px-4 py-8 text-center text-sm text-muted-foreground">
-        <div className="flex gap-6 justify-center">
-          <Link href="/privacy" className="hover:text-foreground transition-colors">
-            Privacy
-          </Link>
-          <Link href="/terms" className="hover:text-foreground transition-colors">
-            Terms
-          </Link>
-          <Link href="/roadmap" className="hover:text-foreground transition-colors">
-            Roadmap
+      {/* Pricing */}
+      <section id="pricing" className="border-t">
+        <div className="mx-auto max-w-6xl px-4 py-20">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-3">
+              Simple, BYOK pricing.
+            </h2>
+            <p className="text-muted-foreground">
+              You bring the keys. We bring the workspace. No usage markup, ever.
+            </p>
+          </div>
+          <PricingGrid />
+          <p className="mt-8 text-center text-xs text-muted-foreground">
+            All plans use your own provider API keys. You pay the providers
+            directly for their usage.
+          </p>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section id="faq" className="border-t bg-muted/30">
+        <div className="mx-auto max-w-3xl px-4 py-20">
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-10 text-center">
+            Frequently asked.
+          </h2>
+          <div className="space-y-4">
+            {FAQ.map((item) => (
+              <details
+                key={item.q}
+                className="group rounded-lg border bg-background p-5 open:shadow-sm"
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between font-medium">
+                  {item.q}
+                  <span className="ml-4 text-muted-foreground transition-transform group-open:rotate-45">
+                    +
+                  </span>
+                </summary>
+                <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
+                  {item.a}
+                </p>
+              </details>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* CTA */}
+      <section className="border-t">
+        <div className="mx-auto max-w-3xl px-4 py-20 text-center">
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">
+            Try LettiB.
+          </h2>
+          <p className="mx-auto max-w-xl text-muted-foreground mb-8">
+            Bring your keys, run your first compare in under a minute, and see
+            the difference a real multi-AI workspace makes.
+          </p>
+          <Link href="/signup">
+            <Button size="lg" className="gap-2">
+              Try LettiB
+              <ArrowRight className="h-4 w-4" />
+            </Button>
           </Link>
         </div>
-        <p className="mt-4">© 2026 LettiB. All rights reserved.</p>
-      </footer>
-    </div>
+      </section>
+    </>
   );
 }
+
