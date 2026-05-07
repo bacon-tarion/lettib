@@ -35,9 +35,9 @@ export default function MarketingLayout({
             <Link href="/login" className="text-sm text-muted-foreground hover:text-foreground hidden sm:inline-block">
               Sign in
             </Link>
-            <Link href="/signup">
-              <Button size="sm">Get started</Button>
-            </Link>
+            <Button asChild size="sm">
+              <Link href="/signup">Get started</Link>
+            </Button>
           </div>
         </div>
       </header>
