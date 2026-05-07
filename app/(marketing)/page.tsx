@@ -120,7 +120,7 @@ export default function MarketingHomePage() {
               </Link>
             </Button>
             <Button asChild size="lg" variant="outline" className="w-full sm:w-auto">
-              <Link href="#how">See how it works</Link>
+              <Link href="#how-it-works">See how it works</Link>
             </Button>
           </div>
           <p className="mt-4 text-xs text-muted-foreground">
@@ -145,7 +145,7 @@ export default function MarketingHomePage() {
       </section>
 
       {/* Features */}
-      <section id="features" className="border-t">
+      <section id="features" className="border-t scroll-mt-20">
         <div className="mx-auto max-w-6xl px-4 py-20">
           <div className="text-center mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-3">
@@ -177,7 +177,7 @@ export default function MarketingHomePage() {
       </section>
 
       {/* How it works */}
-      <section id="how" className="border-t bg-muted/30">
+      <section id="how-it-works" className="border-t bg-muted/30 scroll-mt-20">
         <div className="mx-auto max-w-5xl px-4 py-20">
           <div className="text-center mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-3">
@@ -204,7 +204,7 @@ export default function MarketingHomePage() {
       </section>
 
       {/* Pricing */}
-      <section id="pricing" className="border-t">
+      <section id="pricing" className="border-t scroll-mt-20">
         <div className="mx-auto max-w-6xl px-4 py-20">
           <div className="text-center mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-3">
@@ -223,7 +223,7 @@ export default function MarketingHomePage() {
       </section>
 
       {/* FAQ */}
-      <section id="faq" className="border-t bg-muted/30">
+      <section id="faq" className="border-t bg-muted/30 scroll-mt-20">
         <div className="mx-auto max-w-3xl px-4 py-20">
           <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-10 text-center">
             Frequently asked.
