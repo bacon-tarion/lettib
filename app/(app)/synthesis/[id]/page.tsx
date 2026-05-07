@@ -38,7 +38,7 @@ export default async function SynthesisPage({
   const { data: synth } = await serviceClient
     .from("syntheses")
     .select(
-      "id, user_id, conversation_id, project_id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, is_public, share_token"
+      "id, user_id, conversation_id, project_id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, is_public, share_token, score, user_feedback"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -64,6 +64,8 @@ export default async function SynthesisPage({
     created_at: string;
     is_public: boolean;
     share_token: string | null;
+    score: number | null;
+    user_feedback: string | null;
   };
 
   // Load the source model_responses to render the "models used" pills
@@ -142,7 +144,10 @@ export default async function SynthesisPage({
       <Separator />
 
       <SynthesisActions
+        synthesisId={synthesis.id}
         content={synthesis.content}
+        initialScore={synthesis.score}
+        initialFeedback={synthesis.user_feedback}
         shareSlot={
           <ShareDialog
             synthesisId={synthesis.id}
