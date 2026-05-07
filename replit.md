@@ -32,7 +32,7 @@ pnpm --filter @workspace/lettib run lint       # ESLint
   - **Projects:** `app/(app)/projects/[id]/` (detail page), `actions.ts` (project CRUD)
   - **Chat:** `app/(app)/chat/` (single-model chat), `app/(app)/chat/[id]/` (read-only viewer)
   - **Compare:** `app/(app)/compare/` (UI), `api/compare/route.ts` (SSE multiplex)
-  - **Synthesis:** `app/(app)/synthesis/[id]/` (viewer), `api/synthesis/route.ts` (generation)
+  - **Synthesis:** `app/(app)/synthesis/[id]/` (viewer w/ thumbs rating + feedback), `api/synthesis/route.ts` (generation), `api/syntheses?project_id=` (per-project list, ownership-checked), `api/syntheses/[id]/rate` (POST rating 1-5 + optional feedback), `app/(app)/projects/[id]/syntheses/` (full list page w/ search)
   - **Teams:** `app/(app)/teams/` (CRUD), `actions.ts` (team CRUD)
   - **Settings:** `app/(app)/settings/` (user settings), `actions.ts` (API key management)
   - **Usage (user):** `app/(app)/usage/` (per-user dashboard — totals, by-provider, 30d daily, by-action, top-5 models), `api/usage/summary/route.ts` (JSON summary, RLS-scoped), `lib/usage/queries.ts` (`getUserUsageSummary`, `getUserUsageSnapshot`)
@@ -42,7 +42,7 @@ pnpm --filter @workspace/lettib run lint       # ESLint
 - **Supabase Clients:** `lib/supabase/client.ts`, `lib/supabase/server.ts`, `lib/supabase/service.ts`
 - **AI Providers/Models:** `lib/providers/models.ts` (catalog), `lib/providers/*.ts` (factory functions)
 - **Prompts:** `lib/prompts/synthesis.ts`, `lib/prompts/scoring.ts`, `lib/prompts/memory.ts`
-- **DB Schema:** `supabase/migrations/001_projects.sql` (core schema)
+- **DB Schema:** `supabase/migrations/001_projects.sql` (core schema), `013_syntheses_rating.sql` (synthesis score + user_feedback)
 - **API Contracts:** _Populate as you build_
 - **Theme Files:** `components/ui/` (shadcn/ui primitives)
 
