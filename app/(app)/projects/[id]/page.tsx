@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { mockProjects, mockSyntheses } from "@/lib/mockData";
+import { mockProjects } from "@/lib/mockData";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,19 @@ type RecentChat = {
   updated_at: string;
 };
 
+type RecentSynthesis = {
+  id: string;
+  prompt: string;
+  content: string;
+  provider: string | null;
+  model: string | null;
+  tone: string;
+  cost_usd: number;
+  source_response_ids: string[];
+  score: number | null;
+  created_at: string;
+};
+
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("en-US", {
     month: "short",
@@ -42,13 +55,14 @@ function formatDate(dateStr: string) {
 
 export default function ProjectPage({ params }: { params: { id: string } }) {
   const project = mockProjects.find((p) => p.id === params.id) ?? mockProjects[0];
-  const syntheses = mockSyntheses.filter((s) => s.project_id === project.id);
 
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<string>(project.default_ai_team ?? "none");
   const [teamSaving, setTeamSaving] = useState(false);
   const [recentChats, setRecentChats] = useState<RecentChat[]>([]);
   const [chatsLoading, setChatsLoading] = useState(true);
+  const [syntheses, setSyntheses] = useState<RecentSynthesis[]>([]);
+  const [synthesesLoading, setSynthesesLoading] = useState(true);
 
   useEffect(() => {
     listTeams()
@@ -69,6 +83,25 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
       })
       .finally(() => {
         if (!cancelled) setChatsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [params.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSynthesesLoading(true);
+    fetch(`/api/syntheses?project_id=${params.id}&limit=5`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) setSyntheses(data.syntheses ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setSyntheses([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSynthesesLoading(false);
       });
     return () => {
       cancelled = true;
@@ -157,27 +190,66 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           )}
         </TabsContent>
 
-        <TabsContent value="syntheses" className="mt-4">
-          {syntheses.length === 0 ? (
-            <p className="text-muted-foreground text-sm py-4">No syntheses in this project yet.</p>
+        <TabsContent value="syntheses" className="mt-4 space-y-3">
+          {synthesesLoading ? (
+            <p className="text-muted-foreground text-sm py-4">Loading…</p>
+          ) : syntheses.length === 0 ? (
+            <p className="text-muted-foreground text-sm py-4">
+              No syntheses yet. Run a Compare to generate one.
+            </p>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {syntheses.map((s) => (
-                <Card key={s.id}>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm leading-snug">{s.question}</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    <p className="text-xs text-muted-foreground line-clamp-3">{s.content}</p>
-                    <div className="flex gap-1 flex-wrap">
-                      {s.models_used.map((m) => (
-                        <Badge key={m} variant="secondary" className="text-xs">{m}</Badge>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {syntheses.map((s) => (
+                  <Link key={s.id} href={`/synthesis/${s.id}`} className="block">
+                    <Card className="hover:shadow-sm transition-shadow h-full">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-sm leading-snug line-clamp-2">
+                          {s.prompt}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-2">
+                        <p className="text-xs text-muted-foreground line-clamp-2">
+                          {s.content}
+                        </p>
+                        <div className="flex gap-1.5 flex-wrap">
+                          <Badge variant="outline" className="text-[10px] capitalize">
+                            {s.tone}
+                          </Badge>
+                          {s.model && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              {s.model}
+                            </Badge>
+                          )}
+                          {s.source_response_ids.length > 0 && (
+                            <Badge variant="outline" className="text-[10px]">
+                              {s.source_response_ids.length} sources
+                            </Badge>
+                          )}
+                          {s.score != null && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              {s.score}/5
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-muted-foreground tabular-nums pt-1">
+                          <span>{formatDate(s.created_at)}</span>
+                          <span>${s.cost_usd.toFixed(4)}</span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                ))}
+              </div>
+              <div className="pt-1 text-right">
+                <Link
+                  href={`/projects/${params.id}/syntheses`}
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                >
+                  View all syntheses →
+                </Link>
+              </div>
+            </>
           )}
         </TabsContent>
 
