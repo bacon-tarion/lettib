@@ -27,6 +27,7 @@ pnpm --filter @workspace/lettib run lint       # ESLint
 ## Where things live
 
 - **Main Application:** `artifacts/lettib/`
+  - **Marketing:** `app/(marketing)/` (public landing, layout w/ nav+footer, `_components/pricing-grid.tsx` shared between `/` and `/pricing`, `/privacy`, `/terms`)
   - **Authentication:** `app/(auth)/login/`, `app/(auth)/signup/`
   - **Dashboard:** `app/(app)/dashboard/`
   - **Projects:** `app/(app)/projects/[id]/` (detail page), `actions.ts` (project CRUD)
