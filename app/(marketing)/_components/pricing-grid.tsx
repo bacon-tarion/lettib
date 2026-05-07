@@ -87,14 +87,13 @@ export function PricingGrid() {
               </div>
               <p className="text-sm text-muted-foreground">{p.blurb}</p>
             </div>
-            <Link href={p.href} className="block">
-              <Button
-                className="w-full"
-                variant={p.highlight ? "default" : "outline"}
-              >
-                {p.cta}
-              </Button>
-            </Link>
+            <Button
+              asChild
+              className="w-full"
+              variant={p.highlight ? "default" : "outline"}
+            >
+              <Link href={p.href}>{p.cta}</Link>
+            </Button>
             <ul className="space-y-2 pt-2">
               {p.features.map((f) => (
                 <li key={f} className="flex items-start gap-2 text-sm">
