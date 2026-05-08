@@ -13,7 +13,7 @@ export const MODELS_CATALOG = {
   ],
   google: [
     { id: 'gemini-2.5-pro-preview-05-06',   name: 'Gemini 2.5 Pro',   context: 1000000, cost_in: 1.25, cost_out: 10.00 },
-    { id: 'gemini-2.5-flash-preview-04-17', name: 'Gemini 2.5 Flash', context: 1000000, cost_in: 0.30, cost_out: 2.50  },
+    { id: 'gemini-2.0-flash',               name: 'Gemini 2.0 Flash', context: 1000000, cost_in: 0.30, cost_out: 2.50  },
   ],
   xai: [
     { id: 'grok-4.1', name: 'Grok 4.1', context: 256000, cost_in: 0.20, cost_out: 0.50  },
