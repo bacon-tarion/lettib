@@ -12,10 +12,8 @@ export const MODELS_CATALOG = {
     { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', context: 200000,  cost_in: 1.00, cost_out: 5.00  },
   ],
   google: [
-    { id: 'gemini-3.1-pro',   name: 'Gemini 3.1 Pro',   context: 1000000, cost_in: 2.00, cost_out: 12.00 },
-    { id: 'gemini-3-flash',   name: 'Gemini 3 Flash',   context: 1000000, cost_in: 0.50, cost_out: 3.00  },
-    { id: 'gemini-2.5-pro',   name: 'Gemini 2.5 Pro',   context: 1000000, cost_in: 1.25, cost_out: 10.00 },
-    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', context: 1000000, cost_in: 0.30, cost_out: 2.50  },
+    { id: 'gemini-2.5-pro-preview-05-06',   name: 'Gemini 2.5 Pro',   context: 1000000, cost_in: 1.25, cost_out: 10.00 },
+    { id: 'gemini-2.5-flash-preview-04-17', name: 'Gemini 2.5 Flash', context: 1000000, cost_in: 0.30, cost_out: 2.50  },
   ],
   xai: [
     { id: 'grok-4.1', name: 'Grok 4.1', context: 256000, cost_in: 0.20, cost_out: 0.50  },
@@ -36,7 +34,7 @@ export type ModelEntry = {
 };
 
 export const DEFAULT_TEAM_MODELS = {
-  research:   ['gpt-5.4', 'claude-opus-4-7', 'gemini-3.1-pro'],
+  research:   ['gpt-5.4', 'claude-opus-4-7', 'gemini-2.5-pro-preview-05-06'],
   coding:     ['claude-sonnet-4-6', 'gpt-5.4'],
   brainstorm: ['claude-opus-4-7', 'gpt-5.4', 'grok-4.1'],
 } as const;
