@@ -33,8 +33,11 @@ export function buildScoringMessage(
     )
     .join("\n\n");
 
+  const keyList = responses.map((r) => `"${r.key}"`).join(", ");
+  const requirement = `\n\nIMPORTANT: You MUST return exactly ${responses.length} score object(s) — one per response — using these keys in this order: [${keyList}]. Score every response, INCLUDING any response you may have authored yourself. Do not skip any key. Do not add keys that are not in this list.`;
+
   return SCORING_PROMPT.replace("{{prompt}}", prompt).replace(
     "{{responses}}",
-    formatted
+    formatted + requirement
   );
 }
