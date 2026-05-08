@@ -500,6 +500,13 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
 
       {responses.length > 0 && (
         <div className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Scores: <span className="font-medium">A</span>ccuracy ·{" "}
+            <span className="font-medium">C</span>larity ·{" "}
+            <span className="font-medium">C</span>reativity ·{" "}
+            <span className="font-medium">U</span>sefulness ·{" "}
+            <span className="font-medium">R</span>isk (higher = more risk)
+          </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {responses.map((r) => (
               <ResponseCard
