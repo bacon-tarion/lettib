@@ -21,6 +21,7 @@ import { listTeams } from "@/app/(app)/teams/actions";
 import { updateProject } from "@/app/(app)/projects/actions";
 import type { Team } from "@/app/(app)/teams/actions";
 import { MemoryForm } from "@/components/memory/memory-form";
+import { ProjectFiles } from "@/components/projects/project-files";
 
 type RecentChat = {
   id: string;
@@ -135,6 +136,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           <TabsTrigger value="chats">Chats</TabsTrigger>
           <TabsTrigger value="syntheses">Syntheses</TabsTrigger>
           <TabsTrigger value="memory">Memory</TabsTrigger>
+          <TabsTrigger value="files">Files</TabsTrigger>
           <TabsTrigger value="notes">Notes</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
@@ -263,6 +265,10 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
               Open full memory editor →
             </Link>
           </div>
+        </TabsContent>
+
+        <TabsContent value="files" className="mt-4">
+          <ProjectFiles projectId={params.id} />
         </TabsContent>
 
         <TabsContent value="notes" className="mt-4">
