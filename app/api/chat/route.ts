@@ -120,6 +120,21 @@ export async function POST(req: NextRequest) {
         }
       }
     }
+
+    // Inject project files (text-extracted at upload time, capped per-file).
+    const { data: pf } = await serviceClient
+      .from("project_files")
+      .select("file_name, extracted_text")
+      .eq("project_id", project_id)
+      .eq("user_id", user.id)
+      .not("extracted_text", "is", null);
+    const fileRows = (pf ?? []) as { file_name: string; extracted_text: string }[];
+    if (fileRows.length > 0) {
+      const filesBlock = fileRows
+        .map((f) => `<file name="${f.file_name}">\n${f.extracted_text}\n</file>`)
+        .join("\n\n");
+      systemPrompt = `Attached project files (use as reference context):\n${filesBlock}\n\n${systemPrompt}`;
+    }
   }
 
   try {
