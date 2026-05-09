@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { streamChat, getServerApiKey } from "@/lib/providers";
 import { MEMORY_INJECTION_PROMPT } from "@/lib/prompts/synthesis";
+import { FREE_COMPARE_LIMIT } from "@/lib/usage/limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,6 +53,38 @@ export async function POST(req: NextRequest) {
   }
 
   const serviceClient = createServiceClient();
+
+  // ── Free-tier compare limit ───────────────────────────────────────────────
+  // Users with NO paid api connections (any provider other than groq) are
+  // capped at FREE_COMPARE_LIMIT compares per calendar month.
+  const { data: paidConns } = await serviceClient
+    .from("api_connections")
+    .select("provider")
+    .eq("user_id", user.id)
+    .in("status", ["connected", "untested"])
+    .neq("provider", "groq");
+  const isFreeTier = !paidConns || paidConns.length === 0;
+  if (isFreeTier) {
+    const monthStart = new Date();
+    monthStart.setUTCDate(1);
+    monthStart.setUTCHours(0, 0, 0, 0);
+    const { count } = await serviceClient
+      .from("usage_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("action", "compare")
+      .gte("created_at", monthStart.toISOString());
+    if ((count ?? 0) >= FREE_COMPARE_LIMIT) {
+      return new Response(
+        JSON.stringify({
+          error: "Free tier limit reached. Add your own API keys to continue.",
+          limit: FREE_COMPARE_LIMIT,
+          used: count,
+        }),
+        { status: 429 }
+      );
+    }
+  }
 
   // Fetch team members
   const { data: team, error: teamError } = await serviceClient
@@ -143,6 +176,21 @@ export async function POST(req: NextRequest) {
           systemPrompt = memoryText + "\n\n" + systemPrompt;
         }
       }
+    }
+
+    // Inject project files (text-extracted at upload time, capped per-file).
+    const { data: pf } = await serviceClient
+      .from("project_files")
+      .select("file_name, extracted_text")
+      .eq("project_id", project_id)
+      .eq("user_id", user.id)
+      .not("extracted_text", "is", null);
+    const fileRows = (pf ?? []) as { file_name: string; extracted_text: string }[];
+    if (fileRows.length > 0) {
+      const filesBlock = fileRows
+        .map((f) => `<file name="${f.file_name}">\n${f.extracted_text}\n</file>`)
+        .join("\n\n");
+      systemPrompt = `Attached project files (use as reference context):\n${filesBlock}\n\n${systemPrompt}`;
     }
   }
 
