@@ -8,6 +8,11 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers";
 import { SYNTHESIS_PROMPT } from "@/lib/prompts/synthesis";
+import {
+  providerToSlug,
+  extractConflictsBlock,
+  parseLineage,
+} from "@/lib/synthesis/lineage";
 import { MEMORY_EXTRACTION_PROMPT } from "@/lib/prompts/memory";
 import { MEMORY_FIELDS, type MemoryFieldKey } from "@/lib/memory/fields";
 import { upsertMemoryFields } from "@/lib/memory/queries";
@@ -171,16 +176,21 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const sourceSlugList = successful
+    .map((r) => `- ${providerToSlug(r.provider)}  (${r.provider} / ${r.model})`)
+    .join("\n");
+
   const formattedResponses = successful
     .map(
       (r, i) =>
-        `### Response ${i + 1} — ${r.provider} / ${r.model}\n${r.content}`
+        `### Response ${i + 1} — slug: ${providerToSlug(r.provider)} (${r.provider} / ${r.model})\n${r.content}`
     )
     .join("\n\n");
 
   const filledPrompt = SYNTHESIS_PROMPT.replace("{{question}}", prompt)
     .replace("{{project_context}}", projectContext)
     .replace("{{tone}}", tone || "professional")
+    .replace("{{source_slugs}}", sourceSlugList)
     .replace("{{responses}}", formattedResponses);
 
   try {
@@ -202,6 +212,12 @@ export async function POST(req: NextRequest) {
     const cost = calcCost(synth.provider, synth.model, tokensIn, tokensOut);
     const latency = Date.now() - startedAt;
 
+    // Parse lineage + conflicts out of the model's structured output. The
+    // saved `content` is the prose body (tags + clean text — viewer renders
+    // both forms from `lineage_data`).
+    const { conflicts, bodyWithoutBlock } = extractConflictsBlock(result.text);
+    const { lineage } = parseLineage(bodyWithoutBlock);
+
     const { data: synthRow, error: synthError } = await serviceClient
       .from("syntheses")
       .insert({
@@ -209,7 +225,7 @@ export async function POST(req: NextRequest) {
         conversation_id,
         project_id: projectId,
         prompt,
-        content: result.text,
+        content: bodyWithoutBlock,
         provider: synth.provider,
         model: synth.model,
         tone: tone || "professional",
@@ -218,6 +234,8 @@ export async function POST(req: NextRequest) {
         cost_usd: cost,
         latency_ms: latency,
         source_response_ids: successful.map((r) => r.id),
+        lineage_data: lineage,
+        conflict_resolutions: conflicts.map((c) => ({ ...c, chosen: null })),
       })
       .select("id")
       .single();
