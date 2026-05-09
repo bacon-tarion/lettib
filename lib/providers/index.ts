@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createXai } from "@ai-sdk/xai";
+import { createGroq } from "@ai-sdk/groq";
 
 export {
   MODELS_CATALOG,
@@ -11,17 +12,40 @@ export {
   getModelDisplayName,
   getProviderForModel,
   getProviderLabel,
+  isFreeModel,
+  FREE_PROVIDERS,
 } from "./models";
 export type { Provider, ModelEntry } from "./models";
 
+export type ProviderName =
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "xai"
+  | "groq"
+  | "custom";
+
 export type StreamChatInput = {
-  provider: "openai" | "anthropic" | "google" | "xai" | "custom";
+  provider: ProviderName;
   model: string;
   apiKey: string;
   baseUrl?: string;
   messages: CoreMessage[];
   systemPrompt?: string;
 };
+
+/**
+ * Resolve the API key for a built-in free provider from server env.
+ * Returns null if the provider is not free or no env key is set.
+ *
+ * Used as a fallback when the user has not connected their own key for
+ * `groq` or `google`. All other providers always require a user key.
+ */
+export function getServerApiKey(provider: string): string | null {
+  if (provider === "groq") return process.env.GROQ_API_KEY ?? null;
+  if (provider === "google") return process.env.GOOGLE_API_KEY ?? null;
+  return null;
+}
 
 export async function streamChat(input: StreamChatInput) {
   const { provider, model, apiKey, baseUrl, messages, systemPrompt } = input;
@@ -41,6 +65,9 @@ export async function streamChat(input: StreamChatInput) {
       break;
     case "xai":
       modelInstance = createXai({ apiKey })(model);
+      break;
+    case "groq":
+      modelInstance = createGroq({ apiKey })(model);
       break;
     case "custom":
       if (!baseUrl) throw new Error("baseUrl required for custom provider");
