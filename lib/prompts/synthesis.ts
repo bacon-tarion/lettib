@@ -27,10 +27,48 @@ When sources disagree:
 
 CRITICAL: Do not invent information not present in the source responses. Do not claim accuracy beyond what the sources support. Start directly with the answer — no preamble. End with one sentence on the most useful next step for the user.
 
+═══════════════════════════════════════════════════════════════════════════
+OUTPUT FORMAT (STRICT):
+
+Your response MUST have exactly two sections, in this order:
+
+1. A fenced block named CONFLICTS containing a JSON array of disagreements
+   between the sources. Use [] if there are none. Each conflict object:
+   {
+     "id":     "<short-kebab-case-slug>",
+     "topic":  "<one short phrase naming the disputed point>",
+     "positions": [
+       { "model": "<source-slug>", "claim": "<one-sentence claim>" }
+     ]
+   }
+   Output it as:
+   \`\`\`conflicts
+   [...]
+   \`\`\`
+
+2. The synthesis prose itself, where EVERY sentence ends with a tag of the
+   form [<source-slug>] indicating which source primarily supports that
+   sentence. If a sentence is your own connective text not from any source,
+   tag it [synth]. If multiple sources agree, pick the one that stated it
+   most precisely. Examples:
+     "Index investing is the gold standard. [claude] Real estate offers tax
+      advantages. [gpt] Both strategies require long horizons. [synth]"
+
+The <source-slug> values you may use are EXACTLY the slugs listed in the
+SOURCES section below. Do not invent new slugs. Do not omit the tag on any
+sentence. Do not put tags inside fenced blocks.
+
+═══════════════════════════════════════════════════════════════════════════
+
 User question: {{question}}
 Project context: {{project_context}}
 Tone: {{tone}}
-Model responses: {{responses}}`;
+
+SOURCES (use these slugs exactly when tagging):
+{{source_slugs}}
+
+Model responses:
+{{responses}}`;
 
 export const MEMORY_INJECTION_PROMPT = `Project memory (background context for this conversation):
 
