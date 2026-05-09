@@ -53,21 +53,27 @@ export function ConflictResolver({ synthesisId, initialConflicts }: Props) {
     );
   }
 
+  // Performs the PATCH save and throws on failure so callers can abort. The
+  // outer button handlers are responsible for setting/clearing UI state.
+  async function persistChoices() {
+    const res = await fetch(`/api/synthesis/${synthesisId}/resolve`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        resolutions: conflicts.map((c) => ({ id: c.id, chosen: c.chosen })),
+      }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error ?? `Save failed (${res.status})`);
+    }
+  }
+
   async function saveChoices() {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(`/api/synthesis/${synthesisId}/resolve`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          resolutions: conflicts.map((c) => ({ id: c.id, chosen: c.chosen })),
-        }),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? `Save failed (${res.status})`);
-      }
+      await persistChoices();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save choices");
     } finally {
@@ -79,8 +85,9 @@ export function ConflictResolver({ synthesisId, initialConflicts }: Props) {
     setGenerating(true);
     setError(null);
     try {
-      // Persist choices first
-      await saveChoices();
+      // Persist choices first — abort generation if the save fails so we
+      // never POST against stale server-side resolutions.
+      await persistChoices();
       const res = await fetch(`/api/synthesis/${synthesisId}/resolve`, {
         method: "POST",
       });
