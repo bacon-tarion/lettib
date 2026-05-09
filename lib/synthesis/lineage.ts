@@ -15,9 +15,8 @@ export interface Conflict {
 }
 
 /**
- * Provider → canonical lineage slug used in [tag] markers.
- * The synth prompt tells the model to use these short slugs; we expose them
- * here both for the prompt's SOURCES list and for color mapping in the UI.
+ * Provider → canonical lineage slug used in [tag] markers (single-source case).
+ * Use `buildUniqueSlugs` when there may be multiple sources per provider.
  */
 export function providerToSlug(provider: string): string {
   switch (provider) {
@@ -34,6 +33,31 @@ export function providerToSlug(provider: string): string {
     default:
       return provider.toLowerCase().replace(/[^a-z0-9-]/g, "-");
   }
+}
+
+/**
+ * Build a unique tag slug for each source response. When two responses share
+ * the same provider (e.g. two OpenAI models in the same compare), we suffix
+ * with -1, -2, etc. so the synth model can distinguish them in tags and
+ * conflict positions.
+ *
+ * Returns slugs in the same order as the input responses.
+ */
+export function buildUniqueSlugs<T extends { provider: string }>(
+  responses: readonly T[]
+): string[] {
+  // Pre-compute provider counts to decide whether to suffix
+  const providerCount: Record<string, number> = {};
+  for (const r of responses) {
+    providerCount[r.provider] = (providerCount[r.provider] ?? 0) + 1;
+  }
+  const seen: Record<string, number> = {};
+  return responses.map((r) => {
+    const base = providerToSlug(r.provider);
+    if ((providerCount[r.provider] ?? 0) <= 1) return base;
+    seen[r.provider] = (seen[r.provider] ?? 0) + 1;
+    return `${base}-${seen[r.provider]}`;
+  });
 }
 
 const SLUG_TO_PROVIDER: Record<string, string> = {
