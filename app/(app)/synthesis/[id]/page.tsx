@@ -11,6 +11,9 @@ import {
 import { cn } from "@/lib/utils";
 import { SynthesisActions } from "./synthesis-actions";
 import { ShareDialog } from "@/components/synthesis/share-dialog";
+import { LineageView } from "@/components/synthesis/lineage-view";
+import { ConflictResolver } from "@/components/synthesis/conflict-resolver";
+import type { LineageSentence, Conflict } from "@/lib/synthesis/lineage";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +41,7 @@ export default async function SynthesisPage({
   const { data: synth } = await serviceClient
     .from("syntheses")
     .select(
-      "id, user_id, conversation_id, project_id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, is_public, share_token, score, user_feedback"
+      "id, user_id, conversation_id, project_id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, is_public, share_token, score, user_feedback, lineage_data, conflict_resolutions"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -66,7 +69,12 @@ export default async function SynthesisPage({
     share_token: string | null;
     score: number | null;
     user_feedback: string | null;
+    lineage_data: LineageSentence[] | null;
+    conflict_resolutions: (Conflict & { chosen: string | null })[] | null;
   };
+
+  const lineage = synthesis.lineage_data ?? [];
+  const conflicts = synthesis.conflict_resolutions ?? [];
 
   // Load the source model_responses to render the "models used" pills
   let sources: { id: string; provider: string; model: string }[] = [];
@@ -120,11 +128,14 @@ export default async function SynthesisPage({
         </div>
       )}
 
-      <div className="prose prose-sm max-w-none dark:prose-invert">
-        <p className="text-base leading-relaxed whitespace-pre-wrap">
-          {synthesis.content}
-        </p>
-      </div>
+      {conflicts.length > 0 && (
+        <ConflictResolver
+          synthesisId={synthesis.id}
+          initialConflicts={conflicts}
+        />
+      )}
+
+      <LineageView content={synthesis.content} lineage={lineage} />
 
       <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
         <span>
