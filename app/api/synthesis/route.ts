@@ -9,7 +9,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers";
 import { SYNTHESIS_PROMPT } from "@/lib/prompts/synthesis";
 import {
-  providerToSlug,
+  buildUniqueSlugs,
   extractConflictsBlock,
   parseLineage,
 } from "@/lib/synthesis/lineage";
@@ -176,14 +176,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const slugs = buildUniqueSlugs(successful);
   const sourceSlugList = successful
-    .map((r) => `- ${providerToSlug(r.provider)}  (${r.provider} / ${r.model})`)
+    .map((r, i) => `- ${slugs[i]}  (${r.provider} / ${r.model})`)
     .join("\n");
 
   const formattedResponses = successful
     .map(
       (r, i) =>
-        `### Response ${i + 1} — slug: ${providerToSlug(r.provider)} (${r.provider} / ${r.model})\n${r.content}`
+        `### Response ${i + 1} — slug: ${slugs[i]} (${r.provider} / ${r.model})\n${r.content}`
     )
     .join("\n\n");
 
