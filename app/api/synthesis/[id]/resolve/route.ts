@@ -9,11 +9,12 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG, getServerApiKey } from "@/lib/providers";
 import {
-  providerToSlug,
+  buildUniqueSlugs,
   extractConflictsBlock,
   parseLineage,
   type Conflict,
 } from "@/lib/synthesis/lineage";
+import { SYNTHESIS_OUTPUT_FORMAT } from "@/lib/prompts/synthesis";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -197,14 +198,15 @@ export async function POST(
     );
   }
 
+  const slugs = buildUniqueSlugs(successful);
   const sourceSlugList = successful
-    .map((r) => `- ${providerToSlug(r.provider)}  (${r.provider} / ${r.model})`)
+    .map((r, i) => `- ${slugs[i]}  (${r.provider} / ${r.model})`)
     .join("\n");
 
   const formattedResponses = successful
     .map(
       (r, i) =>
-        `### Response ${i + 1} — slug: ${providerToSlug(r.provider)}\n${r.content}`
+        `### Response ${i + 1} — slug: ${slugs[i]}\n${r.content}`
     )
     .join("\n\n");
 
@@ -221,7 +223,9 @@ export async function POST(
 
 ${resolutionDirective}
 
-Re-synthesize the original question below using the same SOURCES, but defer to the user's chosen positions for the listed conflicts. You may still note OTHER disagreements that were not on the resolution list. Use the same OUTPUT FORMAT (conflicts block + tagged sentences).
+Re-synthesize the original question below using the same SOURCES, but defer to the user's chosen positions for the listed conflicts. You may still note OTHER disagreements that were not on the resolution list.
+
+${SYNTHESIS_OUTPUT_FORMAT}
 
 User question: ${s.prompt}
 Tone: ${s.tone}
