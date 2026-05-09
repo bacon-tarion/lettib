@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/app/actions/auth";
+import { FeedbackButton } from "@/components/feedback/feedback-button";
 
 const navItems = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
@@ -64,10 +65,11 @@ export function Sidebar({ userEmail }: SidebarProps) {
         })}
       </nav>
 
-      <div className="p-4 border-t space-y-2">
+      <div className="p-4 border-t space-y-1">
         {userEmail && (
-          <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
+          <p className="text-xs text-muted-foreground truncate pb-1">{userEmail}</p>
         )}
+        <FeedbackButton />
         <form action={signOut}>
           <button
             type="submit"
