@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import { streamChat } from "@/lib/providers";
+import { streamChat, getServerApiKey } from "@/lib/providers";
 import { MEMORY_INJECTION_PROMPT } from "@/lib/prompts/synthesis";
 
 export const runtime = "nodejs";
@@ -167,21 +167,18 @@ export async function POST(req: NextRequest) {
         const startedAt = Date.now();
 
         const conn = connByProvider.get(m.provider);
-        if (!conn) {
-          enqueue({
-            type: "error",
-            key,
-            error: `${m.provider} is not connected. Add a key in Settings.`,
-          });
-          return;
-        }
 
-        try {
-          const { data: apiKey, error: vaultError } = await serviceClient.rpc(
+        // Resolve API key. Prefer the user's own connected key. Fall back to
+        // server env keys for built-in free providers (groq, google).
+        let apiKey: string | null = null;
+        let baseUrl: string | null = null;
+
+        if (conn) {
+          const { data: vaultKey, error: vaultError } = await serviceClient.rpc(
             "lettib_read_secret",
             { p_secret_id: conn.vault_secret_id }
           );
-          if (vaultError || !apiKey) {
+          if (vaultError || !vaultKey) {
             enqueue({
               type: "error",
               key,
@@ -189,7 +186,22 @@ export async function POST(req: NextRequest) {
             });
             return;
           }
+          apiKey = vaultKey as string;
+          baseUrl = conn.custom_base_url ?? null;
+        } else {
+          // No user connection — try server-side fallback for free providers.
+          apiKey = getServerApiKey(m.provider);
+          if (!apiKey) {
+            enqueue({
+              type: "error",
+              key,
+              error: `${m.provider} is not connected. Add a key in Settings.`,
+            });
+            return;
+          }
+        }
 
+        try {
           enqueue({ type: "start", key });
 
           const result = await streamChat({
@@ -198,10 +210,11 @@ export async function POST(req: NextRequest) {
               | "anthropic"
               | "google"
               | "xai"
+              | "groq"
               | "custom",
             model: m.model,
-            apiKey: apiKey as string,
-            baseUrl: conn.custom_base_url ?? undefined,
+            apiKey,
+            baseUrl: baseUrl ?? undefined,
             messages: [{ role: "user", content: prompt }],
             systemPrompt: systemPrompt || undefined,
           });
