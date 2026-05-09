@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Sparkles, Zap, Settings, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -91,8 +91,22 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [synthLoading, setSynthLoading] = useState(false);
+  const [usage, setUsage] = useState<{
+    used: number;
+    limit: number;
+    remaining: number;
+    is_free_tier: boolean;
+    blocked: boolean;
+  } | null>(null);
 
   const responsesRef = useRef<ResponseState[]>([]);
+
+  useEffect(() => {
+    fetch("/api/usage/compare-count")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setUsage(d))
+      .catch(() => {});
+  }, [phase]);
 
   const selectedTeam = teams.find((t) => t.id === selectedTeamId);
 
@@ -383,6 +397,24 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold">Compare</h1>
       </div>
+
+      {usage?.is_free_tier && (
+        <div
+          className={
+            usage.blocked
+              ? "rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-2.5 text-sm text-destructive"
+              : usage.remaining <= 1
+                ? "rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-2.5 text-sm text-amber-700 dark:text-amber-400"
+                : "rounded-lg bg-muted/40 border px-4 py-2.5 text-xs text-muted-foreground"
+          }
+        >
+          {usage.blocked
+            ? "Free tier limit reached. Add your own API keys in Settings to continue running comparisons."
+            : `Free tier: ${usage.used} / ${usage.limit} compares used this month${
+                usage.remaining <= 1 ? " — running low" : ""
+              }.`}
+        </div>
+      )}
 
       <div className="flex gap-2 flex-wrap">
         {projects.length > 0 && (
