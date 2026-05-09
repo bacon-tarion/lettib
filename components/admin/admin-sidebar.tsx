@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Shield, Users, BarChart3, ArrowLeft, LogOut } from "lucide-react";
+import { Shield, Users, BarChart3, MessageCircle, ArrowLeft, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/app/actions/auth";
 
@@ -10,6 +10,7 @@ const navItems = [
   { href: "/admin", label: "Overview", icon: Shield, exact: true },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/usage", label: "Usage", icon: BarChart3 },
+  { href: "/admin/feedback", label: "Feedback", icon: MessageCircle },
 ];
 
 interface AdminSidebarProps {
