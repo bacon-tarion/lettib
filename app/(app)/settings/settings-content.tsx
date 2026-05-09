@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiKeyTile } from "@/components/settings/api-key-tile";
 import type { ApiConnection } from "./actions";
+import { PRICING_USD } from "@/lib/pricing";
 
 const PROVIDERS = [
   { id: "openai",    label: "OpenAI",    color: "bg-blue-500",   initial: "O" },
@@ -113,10 +115,21 @@ export function SettingsContent({
             <Badge className="text-sm px-3 py-1">Free during beta</Badge>
           </div>
           <p className="text-sm text-muted-foreground">
-            Full access to all features while LettiB is in beta. Pro pricing
-            will be announced before launch.
+            Full access to all features while LettiB is in beta. When billing is
+            live, plans are{" "}
+            {`Free ($${PRICING_USD.free} forever), Pro ($${PRICING_USD.proMonthly}/month), Power ($${PRICING_USD.powerMonthly}/month), and Lifetime BYOK ($${PRICING_USD.lifetimeByok} one-time).`}{" "}
+            See the{" "}
+            <Link
+              href="/pricing"
+              className="text-foreground underline underline-offset-4 hover:text-primary"
+            >
+              pricing page
+            </Link>{" "}
+            for details.
           </p>
-          <Button variant="outline">Join waitlist for Pro</Button>
+          <Button variant="outline" asChild>
+            <Link href="/pricing">View plans</Link>
+          </Button>
         </TabsContent>
 
         {/* ── Privacy ── */}

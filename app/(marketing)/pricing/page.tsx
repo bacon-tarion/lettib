@@ -2,11 +2,11 @@ import Link from "next/link";
 import { PricingGrid } from "../_components/pricing-grid";
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
+import { PRICING_USD } from "@/lib/pricing";
 
 export const metadata = {
   title: "Pricing — LettiB",
-  description:
-    "Simple BYOK pricing for the LettiB multi-AI workspace. Free, Pro, and Power plans.",
+  description: `Simple BYOK pricing for the LettiB multi-AI workspace. Free ($${PRICING_USD.free} forever), Pro ($${PRICING_USD.proMonthly}/mo), Power ($${PRICING_USD.powerMonthly}/mo), and Lifetime BYOK ($${PRICING_USD.lifetimeByok} one-time).`,
 };
 
 export default function PricingPage() {
@@ -18,8 +18,8 @@ export default function PricingPage() {
             Simple, BYOK pricing.
           </h1>
           <p className="text-lg text-muted-foreground">
-            You bring your provider keys. We bring the workspace. Pay one flat
-            monthly fee — zero markup on your AI usage.
+            You bring your provider keys. We bring the workspace. Choose a
+            monthly plan or lifetime access — zero markup on your AI usage.
           </p>
         </div>
       </section>

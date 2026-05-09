@@ -71,7 +71,7 @@ const FAQ = [
   },
   {
     q: "Whose API costs am I paying?",
-    a: "Yours. LettiB is BYOK — you bring your own provider keys, and you pay the providers directly. We charge a flat monthly subscription for the workspace, with zero usage markup.",
+    a: "Yours. LettiB is BYOK — you bring your own provider keys, and you pay the providers directly. We charge a simple subscription (or a one-time Lifetime BYOK option) for the workspace, with zero usage markup.",
   },
   {
     q: "Which models are supported?",

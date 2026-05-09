@@ -3,64 +3,12 @@ import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-
-const PLANS = [
-  {
-    name: "Free",
-    price: "$0",
-    cadence: "forever",
-    blurb: "Bring your own keys. Get the full workspace.",
-    cta: "Start free",
-    href: "/signup",
-    highlight: false,
-    features: [
-      "BYOK — unlimited providers",
-      "Compare up to 3 models at once",
-      "5 projects",
-      "Synthesis (10 / month)",
-      "7-day history",
-    ],
-  },
-  {
-    name: "Pro",
-    price: "$15",
-    cadence: "/month",
-    blurb: "For daily power users who live in multi-AI workflows.",
-    cta: "Upgrade to Pro",
-    href: "/signup?plan=pro",
-    highlight: true,
-    features: [
-      "Everything in Free",
-      "Compare up to 6 models at once",
-      "Unlimited projects",
-      "Unlimited Synthesis",
-      "Project Memory",
-      "Unlimited history & search",
-    ],
-  },
-  {
-    name: "Power",
-    price: "$35",
-    cadence: "/month",
-    blurb: "Teams and prosumers running heavy comparisons.",
-    cta: "Go Power",
-    href: "/signup?plan=power",
-    highlight: false,
-    features: [
-      "Everything in Pro",
-      "Compare up to 12 models at once",
-      "Custom AI Teams",
-      "Shareable synthesis links",
-      "Priority synthesis queue",
-      "Priority support",
-    ],
-  },
-];
+import { PRICING_PLANS } from "@/lib/pricing";
 
 export function PricingGrid() {
   return (
-    <div className="grid gap-5 lg:grid-cols-3">
-      {PLANS.map((p) => (
+    <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+      {PRICING_PLANS.map((p) => (
         <Card
           key={p.name}
           className={
@@ -81,7 +29,7 @@ export function PricingGrid() {
                 <span className="text-4xl font-bold tracking-tight">
                   {p.price}
                 </span>
-                <span className="text-sm text-muted-foreground">
+                <span className="text-sm text-muted-foreground whitespace-nowrap">
                   {p.cadence}
                 </span>
               </div>
