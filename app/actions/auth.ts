@@ -11,6 +11,16 @@ async function getSiteUrl() {
   return `${proto}://${host}`;
 }
 
+/** Same-origin path only — avoids open redirects. */
+function safeNextPath(raw: string | null): string | null {
+  if (!raw) return null;
+  const t = raw.trim();
+  if (!t.startsWith("/") || t.startsWith("//") || t.includes("://")) {
+    return null;
+  }
+  return t;
+}
+
 export async function signIn(_prev: unknown, formData: FormData) {
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
@@ -26,7 +36,8 @@ export async function signIn(_prev: unknown, formData: FormData) {
     return { error: error.message };
   }
 
-  redirect("/dashboard");
+  const next = safeNextPath(formData.get("next") as string | null);
+  redirect(next ?? "/dashboard");
 }
 
 export async function signUp(_prev: unknown, formData: FormData) {

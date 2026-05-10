@@ -51,7 +51,7 @@ function validateKey(
       break;
     case "xai":
       if (!rawKey.startsWith("xai-") || rawKey.length < 20)
-        return 'xAI keys must start with "xai-" and be at least 20 characters.';
+        return 'xAI (Grok) keys must start with "xai-" and be at least 20 characters.';
       break;
     case "custom":
       if (!options?.baseUrl) return "Base URL is required for custom providers.";
@@ -236,7 +236,7 @@ export async function testApiKey(
           headers: { Authorization: `Bearer ${rawKey}` },
         });
         testOk = res.ok;
-        if (!testOk) testError = `xAI returned ${res.status}`;
+        if (!testOk) testError = `xAI (Grok) returned ${res.status}`;
         break;
       }
       case "custom": {

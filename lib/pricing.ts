@@ -10,15 +10,34 @@ export const PRICING_USD = {
   lifetimeByok: 79,
 } as const;
 
+/** Max models in one Compare (5 BYOK providers + built-in Groq). */
+export const COMPARE_MODELS_BY_PLAN = {
+  free: 2,
+  pro: 4,
+  power: 6,
+} as const;
+
+/** Stripe Dashboard price lookup keys (Products → Prices). */
+export const STRIPE_PRICE_LOOKUP_KEYS = {
+  pro: "pro_monthly",
+  power: "power_monthly",
+  lifetime_byok: "lifetime_byok",
+} as const;
+
+export type PaidCheckoutPlan = keyof typeof STRIPE_PRICE_LOOKUP_KEYS;
+
 export type PricingPlan = {
   name: string;
   price: string;
   cadence: string;
   blurb: string;
   cta: string;
+  /** Signup / marketing path when no paid checkout. */
   href: string;
   highlight: boolean;
   features: string[];
+  /** When set, CTA opens Stripe Checkout (server API) for this tier. */
+  paidCheckoutPlan?: PaidCheckoutPlan;
 };
 
 export const PRICING_PLANS: PricingPlan[] = [
@@ -32,7 +51,7 @@ export const PRICING_PLANS: PricingPlan[] = [
     highlight: false,
     features: [
       "BYOK — unlimited providers",
-      "Compare up to 3 models at once",
+      `Compare up to ${COMPARE_MODELS_BY_PLAN.free} models at once`,
       "5 projects",
       "Synthesis (10 / month)",
       "7-day history",
@@ -45,10 +64,11 @@ export const PRICING_PLANS: PricingPlan[] = [
     blurb: "For daily power users who live in multi-AI workflows.",
     cta: "Upgrade to Pro",
     href: "/signup?plan=pro",
+    paidCheckoutPlan: "pro",
     highlight: true,
     features: [
       "Everything in Free",
-      "Compare up to 6 models at once",
+      `Compare up to ${COMPARE_MODELS_BY_PLAN.pro} models at once`,
       "Unlimited projects",
       "Unlimited Synthesis",
       "Project Memory",
@@ -62,10 +82,11 @@ export const PRICING_PLANS: PricingPlan[] = [
     blurb: "Teams and prosumers running heavy comparisons.",
     cta: "Go Power",
     href: "/signup?plan=power",
+    paidCheckoutPlan: "power",
     highlight: false,
     features: [
       "Everything in Pro",
-      "Compare up to 12 models at once",
+      `Compare up to ${COMPARE_MODELS_BY_PLAN.power} models at once`,
       "Custom AI Teams",
       "Shareable synthesis links",
       "Priority synthesis queue",
@@ -79,6 +100,7 @@ export const PRICING_PLANS: PricingPlan[] = [
     blurb: "Pay once for ongoing Power-level access — no subscription.",
     cta: "Buy lifetime",
     href: "/signup?plan=lifetime",
+    paidCheckoutPlan: "lifetime_byok",
     highlight: false,
     features: [
       "Everything in Power",

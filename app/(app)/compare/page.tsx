@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
+import { isGroqBuiltinEnabled } from "@/lib/builtin-providers";
 import { CompareUI } from "@/components/compare/compare-ui";
 
 export const dynamic = "force-dynamic";
@@ -89,11 +90,18 @@ export default async function ComparePage() {
       })),
   }));
 
+  const connectionList = (connections ?? []) as CompareConnection[];
+  const mergedConnections =
+    isGroqBuiltinEnabled() &&
+    !connectionList.some((c) => c.provider === "groq")
+      ? [...connectionList, { provider: "groq", status: "connected" }]
+      : connectionList;
+
   return (
     <CompareUI
       projects={(projects ?? []) as CompareProject[]}
       teams={teamsWithMembers}
-      connections={(connections ?? []) as CompareConnection[]}
+      connections={mergedConnections}
     />
   );
 }

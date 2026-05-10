@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { mockUser } from "@/lib/mockData";
+import { isGroqBuiltinEnabled } from "@/lib/builtin-providers";
 import { listApiKeys } from "./actions";
 import { SettingsContent } from "./settings-content";
 
@@ -37,6 +38,7 @@ export default async function SettingsPage() {
       initialConnections={connections}
       userEmail={userEmail}
       userName={userName}
+      groqBuiltinConfigured={isGroqBuiltinEnabled()}
     />
   );
 }

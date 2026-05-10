@@ -47,7 +47,7 @@ export default function PrivacyPage() {
       <h2>Third parties</h2>
       <p>
         Your prompts are sent to whichever model provider you select (OpenAI,
-        Anthropic, Google, xAI, or a custom endpoint). Their privacy and data
+        Anthropic, Google, xAI (Grok), or a custom endpoint). Their privacy and data
         retention policies apply to that traffic.
       </p>
 

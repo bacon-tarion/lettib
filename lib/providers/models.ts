@@ -55,7 +55,7 @@ export function getProviderLabel(provider: string): string {
     openai: 'OpenAI',
     anthropic: 'Anthropic',
     google: 'Google',
-    xai: 'xAI',
+    xai: 'xAI (Grok)',
     groq: 'Groq',
     custom: 'Custom',
   };

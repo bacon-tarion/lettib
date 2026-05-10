@@ -22,9 +22,14 @@ import type { ApiConnection } from "@/app/(app)/settings/actions";
 interface TeamsGridProps {
   initialTeams: Team[];
   connectedProviders: ApiConnection[];
+  builtinGroqAvailable?: boolean;
 }
 
-export function TeamsGrid({ initialTeams, connectedProviders }: TeamsGridProps) {
+export function TeamsGrid({
+  initialTeams,
+  connectedProviders,
+  builtinGroqAvailable = false,
+}: TeamsGridProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -35,9 +40,11 @@ export function TeamsGrid({ initialTeams, connectedProviders }: TeamsGridProps) 
   const [generating, setGenerating]   = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
 
-  const connectedCount = connectedProviders.filter(
+  const vaultConnectedCount = connectedProviders.filter(
     (c) => c.status === "connected" || c.status === "untested"
   ).length;
+  const connectedCount =
+    vaultConnectedCount + (builtinGroqAvailable ? 1 : 0);
 
   function openCreate() {
     setEditingTeam(null);
@@ -152,6 +159,7 @@ export function TeamsGrid({ initialTeams, connectedProviders }: TeamsGridProps) 
         open={dialogMode !== null}
         team={editingTeam}
         connectedProviders={connectedProviders}
+        builtinGroqAvailable={builtinGroqAvailable}
         onSave={handleSaved}
         onCancel={() => {
           setDialogMode(null);

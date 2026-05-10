@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
+import { isGroqBuiltinEnabled } from "@/lib/builtin-providers";
 import { MODELS_CATALOG, DEFAULT_TEAM_MODELS } from "@/lib/providers/models";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -82,6 +83,7 @@ export async function createTeam(
       connectedProviders.add(c.provider as string);
     }
   }
+  if (isGroqBuiltinEnabled()) connectedProviders.add("groq");
 
   for (const member of input.members) {
     if (!connectedProviders.has(member.provider)) {
@@ -149,6 +151,26 @@ export async function updateTeam(
     return { success: false, error: "Team name must be 50 characters or fewer." };
   if (!input.members || input.members.length < 2)
     return { success: false, error: "A team needs at least 2 models." };
+
+  const { data: connsForMembers } = await serviceClient
+    .from("api_connections")
+    .select("provider, status")
+    .eq("user_id", user.id);
+  const connectedProviders = new Set<string>(["custom"]);
+  for (const c of connsForMembers ?? []) {
+    if (c.status === "connected" || c.status === "untested") {
+      connectedProviders.add(c.provider as string);
+    }
+  }
+  if (isGroqBuiltinEnabled()) connectedProviders.add("groq");
+  for (const member of input.members) {
+    if (!connectedProviders.has(member.provider)) {
+      return {
+        success: false,
+        error: `You haven't connected ${member.provider}. Add an API key in Settings first.`,
+      };
+    }
+  }
 
   const { error: updateError } = await serviceClient
     .from("ai_teams")
@@ -262,6 +284,7 @@ export async function generateStarterTeams(): Promise<{
       .filter((c) => c.status === "connected" || c.status === "untested")
       .map((c) => c.provider)
   );
+  if (isGroqBuiltinEnabled()) connectedProviders.add("groq");
 
   if (connectedProviders.size < 2) {
     return { error: "Connect at least 2 providers first" };

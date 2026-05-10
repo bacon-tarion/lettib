@@ -29,7 +29,7 @@ export default function PricingPage() {
           <PricingGrid />
           <p className="mt-8 text-center text-xs text-muted-foreground">
             All plans require your own provider API keys (OpenAI, Anthropic,
-            Google, xAI). You&apos;re billed by the providers for their usage.
+            Google, xAI (Grok)). You&apos;re billed by the providers for their usage.
           </p>
         </div>
       </section>

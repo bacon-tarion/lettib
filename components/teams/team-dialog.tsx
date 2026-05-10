@@ -37,6 +37,8 @@ interface TeamDialogProps {
   open: boolean;
   team?: Team | null;
   connectedProviders: ApiConnection[];
+  /** Host provides GROQ_API_KEY — show Groq models without a user Vault key */
+  builtinGroqAvailable?: boolean;
   onSave: () => void;
   onCancel: () => void;
 }
@@ -53,6 +55,7 @@ export function TeamDialog({
   open,
   team,
   connectedProviders,
+  builtinGroqAvailable = false,
   onSave,
   onCancel,
 }: TeamDialogProps) {
@@ -85,7 +88,7 @@ export function TeamDialog({
   );
 
   const seenProviders = new Set<string>();
-  const providerGroups: ProviderGroup[] = activeConnections
+  let providerGroups: ProviderGroup[] = activeConnections
     .map((conn): ProviderGroup | null => {
       if (seenProviders.has(conn.provider)) return null;
       seenProviders.add(conn.provider);
@@ -105,6 +108,22 @@ export function TeamDialog({
       return { provider: conn.provider, label: getProviderLabel(conn.provider), models };
     })
     .filter((g): g is ProviderGroup => g !== null && g.models.length > 0);
+
+  if (
+    builtinGroqAvailable &&
+    !providerGroups.some((g) => g.provider === "groq")
+  ) {
+    const models = (catalog.groq ?? []).map((m) => ({
+      modelId: m.id,
+      modelName: m.name,
+    }));
+    if (models.length > 0) {
+      providerGroups = [
+        ...providerGroups,
+        { provider: "groq", label: getProviderLabel("groq"), models },
+      ];
+    }
+  }
 
   function toggleModel(provider: string, modelId: string) {
     setSelectedModels((prev) => {

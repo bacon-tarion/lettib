@@ -12,12 +12,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PricingGrid } from "./_components/pricing-grid";
+import { COMPARE_MODELS_BY_PLAN } from "@/lib/pricing";
 
 const FEATURES = [
   {
     icon: KeyRound,
     title: "Connect your keys",
-    desc: "Bring your own OpenAI, Anthropic, Google, or xAI keys. Your usage, your costs — zero markup.",
+    desc: "Bring your own OpenAI, Anthropic, Google, or xAI (Grok) keys. Your usage, your costs — zero markup.",
   },
   {
     icon: Users,
@@ -87,7 +88,7 @@ const FAQ = [
   },
   {
     q: "Is there a free plan?",
-    a: "Yes. The Free plan is BYOK, unlimited providers, with up to 3-model compare and 10 syntheses per month. No credit card required.",
+    a: `Yes. The Free plan is BYOK, unlimited providers, with up to ${COMPARE_MODELS_BY_PLAN.free}-model compare and 10 syntheses per month. No credit card required.`,
   },
 ];
 
