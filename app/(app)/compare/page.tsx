@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -57,10 +58,18 @@ export default async function ComparePage() {
       : connectionList;
 
   return (
-    <CompareUI
-      projects={(projects ?? []) as CompareProject[]}
-      connections={mergedConnections}
-      teams={teams}
-    />
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-7xl p-8 text-sm text-muted-foreground">
+          Loading compare…
+        </div>
+      }
+    >
+      <CompareUI
+        projects={(projects ?? []) as CompareProject[]}
+        connections={mergedConnections}
+        teams={teams}
+      />
+    </Suspense>
   );
 }

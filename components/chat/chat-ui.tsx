@@ -26,6 +26,8 @@ import {
   compareToChatStorageKey,
   type CompareToChatHandoff,
 } from "@/lib/compare/to-chat-handoff";
+import { RestoreSessionBanner } from "@/components/session/restore-session-banner";
+import { LETTIB_STATE_CHAT, SESSION_STATE_TTL_MS } from "@/lib/session/keys";
 
 /** Survives React Strict Mode remount so Compare→Chat handoff is not lost after first read. */
 const compareHandoffByNonce = new Map<string, CompareToChatHandoff>();
@@ -118,6 +120,16 @@ interface ChatUIProps {
   connections: ChatConnection[];
 }
 
+type ChatStoredStateV1 = {
+  v: 1;
+  savedAt: number;
+  messages: Message[];
+  selectedModelValue: string;
+  selectedProjectId: string;
+  selectedTone: string;
+  conversationId: string | null;
+};
+
 export function ChatUI({ projects, connections }: ChatUIProps) {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -135,11 +147,14 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
   const [messageUsage, setMessageUsage] = useState<Map<string, UsageInfo>>(
     new Map()
   );
+  const [showRestoreBanner, setShowRestoreBanner] = useState(false);
 
   const conversationIdRef = useRef<string | null>(null);
   const lastUserInputRef = useRef<string>("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const startTimeRef = useRef<number>(0);
+  const sessionHydratedRef = useRef(false);
+  const urlConversationAttemptedRef = useRef(false);
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
@@ -219,6 +234,63 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
         [selectedProvider, selectedModel, selectedProjectId]
       ),
     });
+
+  useEffect(() => {
+    if (searchParams.get("fromCompare") === "1") return;
+    const cid = searchParams.get("conversation");
+    if (!cid || urlConversationAttemptedRef.current) return;
+    urlConversationAttemptedRef.current = true;
+    sessionHydratedRef.current = true;
+
+    void (async () => {
+      try {
+        const res = await fetch(`/api/conversations/${cid}`);
+        if (!res.ok) {
+          return;
+        }
+        const data = (await res.json()) as {
+          conversation: {
+            mode: string;
+            project_id: string | null;
+            provider: string | null;
+            model: string | null;
+          };
+          messages: { id: string; role: string; content: string }[];
+        };
+        if (data.conversation.mode !== "chat") {
+          return;
+        }
+
+        const msgs: Message[] = (data.messages ?? [])
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          }));
+
+        setMessages(msgs);
+        setConversationId(cid);
+        if (
+          data.conversation.project_id &&
+          projects.some((p) => p.id === data.conversation.project_id)
+        ) {
+          setSelectedProjectId(data.conversation.project_id);
+        }
+        const pv =
+          data.conversation.provider && data.conversation.model
+            ? `${data.conversation.provider}::${data.conversation.model}`
+            : null;
+        if (pv && modelOptions.some((o) => o.value === pv)) {
+          setSelectedModelValue(pv);
+        }
+        setShowRestoreBanner(true);
+        router.replace("/chat");
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, [searchParams, router, setMessages, projects, modelOptions]);
 
   useEffect(() => {
     if (searchParams.get("fromCompare") !== "1") return;
@@ -301,6 +373,7 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
       })();
     }
 
+    sessionHydratedRef.current = true;
     router.replace("/chat");
   }, [
     searchParams,
@@ -308,6 +381,68 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
     connections,
     projects,
     setMessages,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || sessionHydratedRef.current) return;
+    if (searchParams.get("fromCompare") === "1") return;
+    if (searchParams.get("conversation")) return;
+    try {
+      const raw = sessionStorage.getItem(LETTIB_STATE_CHAT);
+      if (!raw) return;
+      const p = JSON.parse(raw) as ChatStoredStateV1;
+      if (p.v !== 1 || !Array.isArray(p.messages)) return;
+      if (Date.now() - p.savedAt > SESSION_STATE_TTL_MS) {
+        sessionStorage.removeItem(LETTIB_STATE_CHAT);
+        return;
+      }
+      sessionHydratedRef.current = true;
+      setMessages(p.messages);
+      if (p.selectedModelValue && modelOptions.some((o) => o.value === p.selectedModelValue)) {
+        setSelectedModelValue(p.selectedModelValue);
+      }
+      if (p.selectedProjectId && projects.some((x) => x.id === p.selectedProjectId)) {
+        setSelectedProjectId(p.selectedProjectId);
+      }
+      if (p.selectedTone && TONES.some((t) => t.value === p.selectedTone)) {
+        setSelectedTone(p.selectedTone);
+      }
+      setConversationId(p.conversationId ?? null);
+      setShowRestoreBanner(true);
+    } catch {
+      try {
+        sessionStorage.removeItem(LETTIB_STATE_CHAT);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [searchParams, setMessages, modelOptions, projects]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const t = window.setTimeout(() => {
+      try {
+        const payload: ChatStoredStateV1 = {
+          v: 1,
+          savedAt: Date.now(),
+          messages,
+          selectedModelValue,
+          selectedProjectId,
+          selectedTone,
+          conversationId,
+        };
+        sessionStorage.setItem(LETTIB_STATE_CHAT, JSON.stringify(payload));
+      } catch {
+        /* quota / private mode */
+      }
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [
+    messages,
+    selectedModelValue,
+    selectedProjectId,
+    selectedTone,
+    conversationId,
   ]);
 
   useEffect(() => {
@@ -371,6 +506,20 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem-2rem)] max-w-3xl mx-auto">
+      {showRestoreBanner && (
+        <div className="mb-3 shrink-0">
+          <RestoreSessionBanner
+            onDismiss={() => {
+              setShowRestoreBanner(false);
+              try {
+                sessionStorage.removeItem(LETTIB_STATE_CHAT);
+              } catch {
+                /* ignore */
+              }
+            }}
+          />
+        </div>
+      )}
       {/* Top bar */}
       <div className="flex gap-2 flex-wrap mb-4 shrink-0">
         {projects.length > 0 && (

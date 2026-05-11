@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Sparkles, Zap, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,9 +29,12 @@ import {
   type CompareToChatHandoff,
 } from "@/lib/compare/to-chat-handoff";
 import {
-  COMPARE_VIEW_SNAPSHOT_KEY,
-  type CompareViewSnapshotV1,
+  readCompareSnapshotFromStorage,
+  writeCompareSnapshotToStorage,
+  clearCompareSnapshotStorage,
+  type CompareStateSnapshotV2,
 } from "@/lib/compare/view-snapshot";
+import { RestoreSessionBanner } from "@/components/session/restore-session-banner";
 import { cn } from "@/lib/utils";
 import type { CompareProject, CompareConnection } from "@/app/(app)/compare/page";
 
@@ -96,14 +99,37 @@ type ResponseState = {
 
 type Phase = "idle" | "streaming" | "saving" | "done";
 
+type CompareRound = { prompt: string; responses: ResponseState[] };
+
 interface CompareUIProps {
   projects: CompareProject[];
   connections: CompareConnection[];
   teams: Team[];
 }
 
+function snapshotRowToState(
+  r: CompareStateSnapshotV2["rounds"][0]["responses"][0]
+): ResponseState {
+  return {
+    key: r.key,
+    position: r.position,
+    provider: r.provider,
+    model: r.model,
+    modelLabel: r.modelLabel,
+    content: r.content,
+    status: r.status,
+    error: r.error,
+    tokensIn: r.tokensIn,
+    tokensOut: r.tokensOut,
+    latencyMs: r.latencyMs,
+    scores: r.scores,
+  };
+}
+
 export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const compareIdFromUrl = searchParams.get("c");
   const modelPicks = useMemo(() => buildModelPicks(connections), [connections]);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
@@ -111,11 +137,13 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   );
   const [selectedTone, setSelectedTone] = useState<string>("professional");
   const [prompt, setPrompt] = useState("");
+  const [followUpPrompt, setFollowUpPrompt] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
-  const [responses, setResponses] = useState<ResponseState[]>([]);
+  const [rounds, setRounds] = useState<CompareRound[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [synthLoading, setSynthLoading] = useState(false);
+  const [showRestoreBanner, setShowRestoreBanner] = useState(false);
   const [usage, setUsage] = useState<{
     used: number;
     limit: number;
@@ -135,82 +163,212 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   const [teamPresetId, setTeamPresetId] = useState<string>("manual");
   const [retryingKey, setRetryingKey] = useState<string | null>(null);
 
-  const responsesRef = useRef<ResponseState[]>([]);
+  const roundsRef = useRef<CompareRound[]>([]);
   const snapshotHydratedRef = useRef(false);
+  const urlHydratedRef = useRef(false);
+
+  const flatResponses = useMemo(
+    () => rounds.flatMap((x) => x.responses),
+    [rounds]
+  );
+
+  useEffect(() => {
+    roundsRef.current = rounds;
+  }, [rounds]);
 
   useEffect(() => {
     if (typeof window === "undefined" || snapshotHydratedRef.current) return;
-    try {
-      const raw = sessionStorage.getItem(COMPARE_VIEW_SNAPSHOT_KEY);
-      if (!raw) return;
-      const s = JSON.parse(raw) as CompareViewSnapshotV1;
-      if (s.version !== 1 || !Array.isArray(s.responses)) return;
-      const maxAgeMs = 2 * 60 * 60 * 1000;
-      if (Date.now() - s.savedAt > maxAgeMs) {
-        sessionStorage.removeItem(COMPARE_VIEW_SNAPSHOT_KEY);
-        return;
+    if (compareIdFromUrl) return;
+    const snap = readCompareSnapshotFromStorage();
+    if (!snap || !snap.rounds?.length) return;
+    snapshotHydratedRef.current = true;
+    if (snap.selectedProjectId && projects.some((p) => p.id === snap.selectedProjectId)) {
+      setSelectedProjectId(snap.selectedProjectId);
+    }
+    if (snap.selectedTone) setSelectedTone(snap.selectedTone);
+    if (snap.teamPresetId) setTeamPresetId(snap.teamPresetId);
+    if (snap.selectedModelValues?.length) {
+      const allowed = new Set(modelPicks.map((p) => p.value));
+      const next = new Set<string>();
+      for (const v of snap.selectedModelValues) {
+        if (allowed.has(v)) next.add(v);
       }
-      snapshotHydratedRef.current = true;
-      setPrompt(s.prompt);
-      if (s.selectedProjectId && projects.some((p) => p.id === s.selectedProjectId)) {
-        setSelectedProjectId(s.selectedProjectId);
-      }
-      if (s.selectedTone) setSelectedTone(s.selectedTone);
-      setConversationId(s.conversationId);
-      const restored = s.responses as ResponseState[];
-      responsesRef.current = restored;
-      setResponses(restored);
-      setPhase("done");
-      setTeamPresetId("manual");
-    } catch {
+      if (next.size > 0) setSelectedValues(next);
+    }
+    setConversationId(snap.conversationId);
+    setRounds(
+      snap.rounds.map((round) => ({
+        prompt: round.prompt,
+        responses: round.responses.map(snapshotRowToState),
+      }))
+    );
+    setPrompt(snap.rounds[0]?.prompt ?? "");
+    setPhase("done");
+    setShowRestoreBanner(true);
+  }, [projects, modelPicks, compareIdFromUrl]);
+
+  useEffect(() => {
+    if (!compareIdFromUrl || urlHydratedRef.current) return;
+    urlHydratedRef.current = true;
+    snapshotHydratedRef.current = true;
+
+    void (async () => {
       try {
-        sessionStorage.removeItem(COMPARE_VIEW_SNAPSHOT_KEY);
+        const res = await fetch(`/api/conversations/${compareIdFromUrl}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          conversation: {
+            id: string;
+            mode: string;
+            project_id: string | null;
+            title: string;
+          };
+          messages: {
+            role: string;
+            content: string;
+            created_at: string;
+          }[];
+          model_responses: {
+            provider: string;
+            model: string;
+            content: string;
+            tokens_in: number;
+            tokens_out: number;
+            latency_ms: number;
+            error: string | null;
+            position: number;
+            round_index?: number;
+            score_accuracy: number | null;
+            score_clarity: number | null;
+            score_creativity: number | null;
+            score_usefulness: number | null;
+            score_risk: number | null;
+          }[];
+        };
+
+        if (data.conversation.mode !== "compare") return;
+
+        if (
+          data.conversation.project_id &&
+          projects.some((p) => p.id === data.conversation.project_id)
+        ) {
+          setSelectedProjectId(data.conversation.project_id);
+        }
+
+        const userMsgs = (data.messages ?? [])
+          .filter((m) => m.role === "user")
+          .sort(
+            (a, b) =>
+              new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+
+        const byRoundIdx = new Map<number, ResponseState[]>();
+        for (const mr of data.model_responses ?? []) {
+          const ri =
+            typeof mr.round_index === "number" ? mr.round_index : 0;
+          if (!byRoundIdx.has(ri)) byRoundIdx.set(ri, []);
+          const scores =
+            mr.score_accuracy != null
+              ? {
+                  accuracy: mr.score_accuracy,
+                  clarity: mr.score_clarity ?? 0,
+                  creativity: mr.score_creativity ?? 0,
+                  usefulness: mr.score_usefulness ?? 0,
+                  risk: mr.score_risk ?? 0,
+                }
+              : null;
+          byRoundIdx.get(ri)!.push({
+            key: `${mr.provider}::${mr.model}::${mr.position}`,
+            position: mr.position,
+            provider: mr.provider,
+            model: mr.model,
+            modelLabel: getModelDisplayName(mr.provider, mr.model),
+            content: mr.content ?? "",
+            status: mr.error ? "error" : "done",
+            error: mr.error,
+            tokensIn: mr.tokens_in ?? 0,
+            tokensOut: mr.tokens_out ?? 0,
+            latencyMs: mr.latency_ms,
+            scores,
+          });
+        }
+        for (const [, arr] of byRoundIdx) {
+          arr.sort((a, b) => a.position - b.position);
+        }
+
+        const built: CompareRound[] = [];
+        if (userMsgs.length === 0) return;
+        if (userMsgs.length === 1) {
+          const r0 = [...(byRoundIdx.get(0) ?? [])].sort(
+            (a, b) => a.position - b.position
+          );
+          built.push({ prompt: userMsgs[0]!.content, responses: r0 });
+        } else {
+          for (let i = 0; i < userMsgs.length; i++) {
+            const rs = [...(byRoundIdx.get(i) ?? [])].sort(
+              (a, b) => a.position - b.position
+            );
+            built.push({ prompt: userMsgs[i]!.content, responses: rs });
+          }
+        }
+
+        setConversationId(data.conversation.id);
+        setRounds(built);
+        setPrompt(built[0]?.prompt ?? "");
+        setPhase("done");
+        setShowRestoreBanner(true);
       } catch {
         /* ignore */
       }
-    }
-  }, [projects]);
+    })();
+  }, [compareIdFromUrl, projects]);
 
   useEffect(() => {
     const allTerminal =
-      responses.length > 0 &&
-      responses.every((r) => r.status === "done" || r.status === "error");
+      flatResponses.length > 0 &&
+      flatResponses.every((r) => r.status === "done" || r.status === "error");
     if (!allTerminal || phase === "streaming" || retryingKey) return;
     try {
-      const snap: CompareViewSnapshotV1 = {
-        version: 1,
+      const snap: CompareStateSnapshotV2 = {
+        version: 2,
         savedAt: Date.now(),
-        prompt,
         selectedProjectId,
         selectedTone,
+        teamPresetId,
+        selectedModelValues: Array.from(selectedValues),
         conversationId,
-        responses: responses.map((r) => ({
-          key: r.key,
-          position: r.position,
-          provider: r.provider,
-          model: r.model,
-          modelLabel: r.modelLabel,
-          content: r.content,
-          status: r.status,
-          error: r.error,
-          tokensIn: r.tokensIn,
-          tokensOut: r.tokensOut,
-          latencyMs: r.latencyMs,
-          scores: r.scores,
+        rounds: rounds.map((round) => ({
+          prompt: round.prompt,
+          responses: round.responses.map((r) => ({
+            key: r.key,
+            position: r.position,
+            provider: r.provider,
+            model: r.model,
+            modelLabel: r.modelLabel,
+            content: r.content,
+            status: r.status,
+            error: r.error,
+            tokensIn: r.tokensIn,
+            tokensOut: r.tokensOut,
+            latencyMs: r.latencyMs,
+            scores: r.scores,
+          })),
         })),
       };
-      sessionStorage.setItem(COMPARE_VIEW_SNAPSHOT_KEY, JSON.stringify(snap));
+      writeCompareSnapshotToStorage(snap);
     } catch {
       /* ignore quota / private mode */
     }
   }, [
-    responses,
+    flatResponses,
+    rounds,
     phase,
     retryingKey,
-    prompt,
     selectedProjectId,
     selectedTone,
     conversationId,
+    selectedValues,
+    teamPresetId,
   ]);
 
   useEffect(() => {
@@ -253,16 +411,17 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   }, [selectedModels]);
 
   const totalActualCost = useMemo(() => {
-    return responses.reduce(
+    return flatResponses.reduce(
       (sum, r) =>
         sum + calcCompareModelCost(r.provider, r.model, r.tokensIn, r.tokensOut),
       0
     );
-  }, [responses]);
+  }, [flatResponses]);
 
   function applyTeamPreset(teamKey: string) {
     setTeamPresetId(teamKey);
-    setResponses([]);
+    setRounds([]);
+    roundsRef.current = [];
     setConversationId(null);
     setPhase("idle");
     if (teamKey === "manual") return;
@@ -293,7 +452,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       next.add(value);
       return next;
     });
-    setResponses([]);
+    setRounds([]);
+    roundsRef.current = [];
     setConversationId(null);
     setPhase("idle");
   }
@@ -318,13 +478,17 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
           | ((prev: ResponseState) => Partial<ResponseState>)
       ) => {
         if (opts.filterKey && key !== opts.filterKey) return;
-        const next = responsesRef.current.map((r) => {
-          if (r.key !== key) return r;
-          const p = typeof patch === "function" ? patch(r) : patch;
-          return { ...r, ...p };
-        });
-        responsesRef.current = next;
-        setResponses(next);
+        const cur = roundsRef.current;
+        const next = cur.map((round) => ({
+          ...round,
+          responses: round.responses.map((r) => {
+            if (r.key !== key) return r;
+            const p = typeof patch === "function" ? patch(r) : patch;
+            return { ...r, ...p };
+          }),
+        }));
+        roundsRef.current = next;
+        setRounds(next);
       };
 
       const handleEvent = (raw: string) => {
@@ -377,24 +541,29 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       buffer += decoder.decode();
       if (buffer.trim()) handleEvent(buffer);
 
-      const stuck = responsesRef.current.filter(
-        (r) =>
-          (!opts.filterKey || r.key === opts.filterKey) &&
-          (r.status === "pending" || r.status === "streaming")
+      const stuck = roundsRef.current.flatMap((round) =>
+        round.responses.filter(
+          (r) =>
+            (!opts.filterKey || r.key === opts.filterKey) &&
+            (r.status === "pending" || r.status === "streaming")
+        )
       );
       if (stuck.length > 0) {
-        const next = responsesRef.current.map((r) =>
-          (!opts.filterKey || r.key === opts.filterKey) &&
-          (r.status === "pending" || r.status === "streaming")
-            ? {
-                ...r,
-                status: "error" as const,
-                error: "Stream ended unexpectedly",
-              }
-            : r
-        );
-        responsesRef.current = next;
-        setResponses(next);
+        const next = roundsRef.current.map((round) => ({
+          ...round,
+          responses: round.responses.map((r) =>
+            (!opts.filterKey || r.key === opts.filterKey) &&
+            (r.status === "pending" || r.status === "streaming")
+              ? {
+                  ...r,
+                  status: "error" as const,
+                  error: "Stream ended unexpectedly",
+                }
+              : r
+          ),
+        }));
+        roundsRef.current = next;
+        setRounds(next);
       }
     },
     []
@@ -411,13 +580,14 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     }
 
     try {
-      sessionStorage.removeItem(COMPARE_VIEW_SNAPSHOT_KEY);
+      clearCompareSnapshotStorage();
     } catch {
       /* ignore */
     }
 
     setGlobalError(null);
     setConversationId(null);
+    setFollowUpPrompt("");
     setPhase("streaming");
 
     const model_ids = selectedModels.map((m) => ({
@@ -438,8 +608,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       tokensOut: 0,
       scores: null,
     }));
-    responsesRef.current = initial;
-    setResponses(initial);
+    const r0: CompareRound[] = [{ prompt: prompt.trim(), responses: initial }];
+    roundsRef.current = r0;
+    setRounds(r0);
 
     let res: Response;
     try {
@@ -456,6 +627,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Network error");
       setPhase("idle");
+      setRounds([]);
+      roundsRef.current = [];
       return;
     }
 
@@ -463,6 +636,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       const errText = await res.text().catch(() => "");
       setGlobalError(errText || `Request failed (${res.status})`);
       setPhase("idle");
+      setRounds([]);
+      roundsRef.current = [];
       return;
     }
 
@@ -475,15 +650,20 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     });
 
     setPhase("saving");
+    const lastRound =
+      roundsRef.current[roundsRef.current.length - 1] ?? null;
+    const savePrompt = lastRound?.prompt ?? prompt.trim();
+    const saveRows = lastRound?.responses ?? [];
     try {
       const saveRes = await fetch("/api/compare/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           conversation_id: streamedConversationId ?? undefined,
-          prompt,
-          responses: responsesRef.current.map((r) => ({
+          prompt: savePrompt,
+          responses: saveRows.map((r) => ({
             key: r.key,
+            position: r.position,
             provider: r.provider,
             model: r.model,
             content: r.content,
@@ -515,12 +695,21 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             ]
           )
         );
-        const next = responsesRef.current.map((r) => ({
-          ...r,
-          scores: scoreByKey.get(r.key) ?? null,
-        }));
-        responsesRef.current = next;
-        setResponses(next);
+        const cur = roundsRef.current;
+        if (cur.length > 0) {
+          const lastIdx = cur.length - 1;
+          const last = cur[lastIdx]!;
+          const nextLast = {
+            ...last,
+            responses: last.responses.map((r) => ({
+              ...r,
+              scores: scoreByKey.get(r.key) ?? r.scores,
+            })),
+          };
+          const next = [...cur.slice(0, lastIdx), nextLast];
+          roundsRef.current = next;
+          setRounds(next);
+        }
       }
     } catch (err) {
       setGlobalError(
@@ -531,8 +720,173 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     setPhase("done");
   }
 
+  async function runFollowUpCompare() {
+    if (
+      !followUpPrompt.trim() ||
+      !conversationId ||
+      selectedModels.length === 0 ||
+      phase === "streaming" ||
+      retryingKey
+    ) {
+      return;
+    }
+
+    setGlobalError(null);
+    setPhase("streaming");
+
+    const startPos =
+      Math.max(
+        -1,
+        ...roundsRef.current.flatMap((round) =>
+          round.responses.map((x) => x.position)
+        )
+      ) + 1;
+
+    const model_ids = selectedModels.map((m) => ({
+      provider: m.provider,
+      model: m.modelId,
+    }));
+
+    const initial: ResponseState[] = selectedModels.map((m, i) => ({
+      key: `${m.provider}::${m.modelId}::${startPos + i}`,
+      position: startPos + i,
+      provider: m.provider,
+      model: m.modelId,
+      modelLabel: getModelDisplayName(m.provider, m.modelId),
+      content: "",
+      status: "pending",
+      error: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      scores: null,
+    }));
+
+    const appended: CompareRound[] = [
+      ...roundsRef.current,
+      { prompt: followUpPrompt.trim(), responses: initial },
+    ];
+    roundsRef.current = appended;
+    setRounds(appended);
+
+    let res: Response;
+    try {
+      res = await fetch("/api/compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: followUpPrompt.trim(),
+          model_ids,
+          project_id: selectedProjectId || null,
+          tone: selectedTone,
+          conversation_id: conversationId,
+          compare_follow_up: true,
+        }),
+      });
+    } catch (err) {
+      setGlobalError(err instanceof Error ? err.message : "Network error");
+      setPhase("done");
+      const rolled = roundsRef.current.slice(0, -1);
+      roundsRef.current = rolled;
+      setRounds(rolled);
+      return;
+    }
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      setGlobalError(errText || `Request failed (${res.status})`);
+      setPhase("done");
+      const rolled = roundsRef.current.slice(0, -1);
+      roundsRef.current = rolled;
+      setRounds(rolled);
+      return;
+    }
+
+    await consumeSseStream(res, {
+      onMeta: (id) => {
+        setConversationId(id);
+      },
+    });
+
+    setPhase("saving");
+    const lastRound =
+      roundsRef.current[roundsRef.current.length - 1] ?? null;
+    const savePrompt = lastRound?.prompt ?? followUpPrompt.trim();
+    const saveRows = lastRound?.responses ?? [];
+    try {
+      const saveRes = await fetch("/api/compare/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: conversationId,
+          prompt: savePrompt,
+          responses: saveRows.map((r) => ({
+            key: r.key,
+            position: r.position,
+            provider: r.provider,
+            model: r.model,
+            content: r.content,
+            tokens_in: r.tokensIn,
+            tokens_out: r.tokensOut,
+            latency_ms: r.latencyMs ?? 0,
+            error: r.error,
+          })),
+        }),
+      });
+      const data = await saveRes.json();
+      if (!saveRes.ok) {
+        throw new Error(data.error || `Save failed (${saveRes.status})`);
+      }
+      if (Array.isArray(data.scores)) {
+        const scoreByKey = new Map<string, ResponseCardScores>(
+          data.scores.map(
+            (s: ResponseCardScores & { key: string }) => [
+              s.key,
+              {
+                accuracy: s.accuracy,
+                clarity: s.clarity,
+                creativity: s.creativity,
+                usefulness: s.usefulness,
+                risk: s.risk,
+              },
+            ]
+          )
+        );
+        const cur = roundsRef.current;
+        if (cur.length > 0) {
+          const lastIdx = cur.length - 1;
+          const last = cur[lastIdx]!;
+          const nextLast = {
+            ...last,
+            responses: last.responses.map((r) => ({
+              ...r,
+              scores: scoreByKey.get(r.key) ?? r.scores,
+            })),
+          };
+          const next = [...cur.slice(0, lastIdx), nextLast];
+          roundsRef.current = next;
+          setRounds(next);
+        }
+      }
+    } catch (err) {
+      setGlobalError(
+        err instanceof Error ? err.message : "Scoring pass failed"
+      );
+    }
+
+    setFollowUpPrompt("");
+    setPhase("done");
+  }
+
+  function promptForResponseKey(key: string): string {
+    for (const round of roundsRef.current) {
+      if (round.responses.some((x) => x.key === key)) return round.prompt;
+    }
+    return prompt;
+  }
+
   function continueModelToChat(r: ResponseState) {
-    if (!prompt.trim() || !r.content.trim()) return;
+    const q = promptForResponseKey(r.key);
+    if (!q.trim() || !r.content.trim()) return;
     const nonce =
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
@@ -540,7 +894,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     const payload: CompareToChatHandoff = {
       provider: r.provider,
       model: r.model,
-      comparePrompt: prompt,
+      comparePrompt: q,
       compareResponse: r.content,
       projectId: selectedProjectId || null,
       tone: selectedTone,
@@ -560,8 +914,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   }
 
   async function retryOne(r: ResponseState) {
+    const roundPrompt = promptForResponseKey(r.key);
     if (
-      !prompt.trim() ||
+      !roundPrompt.trim() ||
       !conversationId ||
       phase === "streaming" ||
       retryingKey
@@ -589,7 +944,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt,
+          prompt: roundPrompt,
           model_ids: [{ provider: r.provider, model: r.model }],
           project_id: selectedProjectId || null,
           tone: selectedTone,
@@ -620,17 +975,23 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           conversation_id: conversationId,
-          prompt,
-          responses: responsesRef.current.map((row) => ({
-            key: row.key,
-            provider: row.provider,
-            model: row.model,
-            content: row.content,
-            tokens_in: row.tokensIn,
-            tokens_out: row.tokensOut,
-            latency_ms: row.latencyMs ?? 0,
-            error: row.error,
-          })),
+          prompt: roundPrompt,
+          responses: (() => {
+            const roundCtx = roundsRef.current.find((round) =>
+              round.responses.some((x) => x.key === r.key)
+            );
+            return (roundCtx?.responses ?? []).map((row) => ({
+              key: row.key,
+              position: row.position,
+              provider: row.provider,
+              model: row.model,
+              content: row.content,
+              tokens_in: row.tokensIn,
+              tokens_out: row.tokensOut,
+              latency_ms: row.latencyMs ?? 0,
+              error: row.error,
+            }));
+          })(),
         }),
       });
       const data = await saveRes.json();
@@ -649,12 +1010,16 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             ]
           )
         );
-        const next = responsesRef.current.map((row) => ({
-          ...row,
-          scores: scoreByKey.get(row.key) ?? row.scores,
+        const cur = roundsRef.current;
+        const next = cur.map((round) => ({
+          ...round,
+          responses: round.responses.map((row) => ({
+            ...row,
+            scores: scoreByKey.get(row.key) ?? row.scores,
+          })),
         }));
-        responsesRef.current = next;
-        setResponses(next);
+        roundsRef.current = next;
+        setRounds(next);
       }
     } catch {
       // scoring best-effort after retry
@@ -665,11 +1030,15 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   }
 
   function updateCard(key: string, patch: Partial<ResponseState>) {
-    const next = responsesRef.current.map((row) =>
-      row.key === key ? { ...row, ...patch } : row
-    );
-    responsesRef.current = next;
-    setResponses(next);
+    const cur = roundsRef.current;
+    const next = cur.map((round) => ({
+      ...round,
+      responses: round.responses.map((row) =>
+        row.key === key ? { ...row, ...patch } : row
+      ),
+    }));
+    roundsRef.current = next;
+    setRounds(next);
   }
 
   async function createSynthesis() {
@@ -697,12 +1066,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     }
   }
 
-  const successCount = responses.filter(
+  const successCount = flatResponses.filter(
     (r) => r.status === "done" && !r.error && r.content.trim()
   ).length;
   const allComplete =
-    responses.length > 0 &&
-    responses.every((r) => r.status === "done" || r.status === "error");
+    flatResponses.length > 0 &&
+    flatResponses.every((r) => r.status === "done" || r.status === "error");
   const canContinueInChat =
     allComplete && phase !== "streaming" && !retryingKey;
 
@@ -744,6 +1113,15 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold">Compare</h1>
       </div>
+
+      {showRestoreBanner && (
+        <RestoreSessionBanner
+          onDismiss={() => {
+            setShowRestoreBanner(false);
+            clearCompareSnapshotStorage();
+          }}
+        />
+      )}
 
       <div
         className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100/90"
@@ -910,8 +1288,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         </div>
       )}
 
-      {responses.length > 0 && (
-        <div className="space-y-4">
+      {rounds.length > 0 && (
+        <div className="space-y-8">
           <p className="text-xs text-muted-foreground">
             Scores (when available): <span className="font-medium">A</span>
             ccuracy · <span className="font-medium">C</span>larity ·{" "}
@@ -919,48 +1297,62 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             <span className="font-medium">U</span>sefulness ·{" "}
             <span className="font-medium">R</span>isk (higher = more risk)
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {responses.map((r) => (
-              <ResponseCard
-                key={r.key}
-                provider={r.provider}
-                providerLabel={getProviderLabel(r.provider)}
-                model={r.model}
-                modelLabel={r.modelLabel}
-                content={r.content}
-                status={
-                  retryingKey === r.key
-                    ? "streaming"
-                    : r.status === "pending" && phase === "streaming"
-                      ? "pending"
-                      : r.status
-                }
-                error={r.error}
-                tokensIn={r.tokensIn}
-                tokensOut={r.tokensOut}
-                cost={calcCompareModelCost(
-                  r.provider,
-                  r.model,
-                  r.tokensIn,
-                  r.tokensOut
-                )}
-                latencyMs={r.latencyMs}
-                scores={r.scores}
-                onRetry={
-                  r.status === "error" && conversationId && !retryingKey
-                    ? () => void retryOne(r)
-                    : undefined
-                }
-                onContinueInChat={
-                  canContinueInChat && r.status === "done" && r.content.trim()
-                    ? () => continueModelToChat(r)
-                    : undefined
-                }
-              />
-            ))}
-          </div>
 
-          {responses.some((r) => r.status === "done" || r.status === "error") && (
+          {rounds.map((round, ri) => (
+            <div key={`round-${ri}`} className="space-y-4">
+              {ri > 0 && <div className="border-t border-dashed pt-6" aria-hidden />}
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Round {ri + 1}
+              </div>
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap border-l-2 border-primary/25 pl-3">
+                {round.prompt}
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {round.responses.map((r) => (
+                  <ResponseCard
+                    key={r.key}
+                    provider={r.provider}
+                    providerLabel={getProviderLabel(r.provider)}
+                    model={r.model}
+                    modelLabel={r.modelLabel}
+                    content={r.content}
+                    status={
+                      retryingKey === r.key
+                        ? "streaming"
+                        : r.status === "pending" && phase === "streaming"
+                          ? "pending"
+                          : r.status
+                    }
+                    error={r.error}
+                    tokensIn={r.tokensIn}
+                    tokensOut={r.tokensOut}
+                    cost={calcCompareModelCost(
+                      r.provider,
+                      r.model,
+                      r.tokensIn,
+                      r.tokensOut
+                    )}
+                    latencyMs={r.latencyMs}
+                    scores={r.scores}
+                    onRetry={
+                      r.status === "error" && conversationId && !retryingKey
+                        ? () => void retryOne(r)
+                        : undefined
+                    }
+                    onContinueInChat={
+                      canContinueInChat && r.status === "done" && r.content.trim()
+                        ? () => continueModelToChat(r)
+                        : undefined
+                    }
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {flatResponses.some(
+            (r) => r.status === "done" || r.status === "error"
+          ) && (
             <div className="flex justify-end border-t pt-4">
               <p className="text-sm text-muted-foreground tabular-nums">
                 Total estimated cost:{" "}
@@ -988,6 +1380,37 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             <p className="text-xs text-center text-muted-foreground">
               Need at least 2 successful responses to synthesize.
             </p>
+          )}
+
+          {phase === "done" && allComplete && !retryingKey && conversationId && (
+            <div className="space-y-3 border-t pt-6">
+              <p className="text-xs font-medium text-muted-foreground">
+                Ask a follow-up
+              </p>
+              <Textarea
+                placeholder="Continue the thread with the same selected models…"
+                className="resize-none min-h-[80px]"
+                value={followUpPrompt}
+                onChange={(e) => setFollowUpPrompt(e.target.value)}
+                disabled={phase === "streaming" || phase === "saving"}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                className="gap-2"
+                onClick={() => void runFollowUpCompare()}
+                disabled={
+                  !followUpPrompt.trim() ||
+                  selectedModels.length === 0 ||
+                  phase === "streaming" ||
+                  phase === "saving" ||
+                  !!retryingKey
+                }
+              >
+                <Zap className="h-4 w-4" />
+                Continue Compare
+              </Button>
+            </div>
           )}
         </div>
       )}

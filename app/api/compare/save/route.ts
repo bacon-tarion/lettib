@@ -23,6 +23,8 @@ type ResponsePayload = {
   tokens_out: number;
   latency_ms: number;
   error?: string | null;
+  /** Matches model_responses.position (required when positions are not 0..n-1). */
+  position?: number;
 };
 
 type ScoreRow = {
@@ -229,9 +231,13 @@ export async function POST(req: NextRequest) {
 
     const idByKey = new Map<string, string>();
     const rows = existingRows as { id: string; position: number }[];
-    for (let i = 0; i < responses.length; i++) {
-      const row = rows.find((r) => r.position === i);
-      if (row) idByKey.set(responses[i]!.key, row.id);
+    for (const resp of responses) {
+      const pos =
+        typeof resp.position === "number"
+          ? resp.position
+          : parseInt(resp.key.split("::").pop() ?? "-1", 10);
+      const row = rows.find((r) => r.position === pos);
+      if (row) idByKey.set(resp.key, row.id);
     }
 
     const { scores, scoringError } = await runScoringPass(
@@ -331,7 +337,8 @@ export async function POST(req: NextRequest) {
     ),
     latency_ms: r.latency_ms || 0,
     error: r.error ?? null,
-    position: i,
+    position: typeof r.position === "number" ? r.position : i,
+    round_index: 0,
   }));
 
   const { data: insertedResponses, error: insertError } = await serviceClient
@@ -376,8 +383,13 @@ export async function POST(req: NextRequest) {
     insertedByPosition.set(row.position, row.id);
   }
   for (let i = 0; i < responses.length; i++) {
-    const id = insertedByPosition.get(i);
-    if (id) idByKey.set(responses[i]!.key, id);
+    const resp = responses[i]!;
+    const pos =
+      typeof resp.position === "number"
+        ? resp.position
+        : parseInt(resp.key.split("::").pop() ?? String(i), 10);
+    const id = insertedByPosition.get(pos);
+    if (id) idByKey.set(resp.key, id);
   }
 
   const { scores, scoringError } = await runScoringPass(

@@ -75,12 +75,14 @@ export async function POST(req: NextRequest) {
     tone,
     conversation_id: bodyConversationId,
     retry_position,
+    compare_follow_up: rawFollowUp,
   } = body as {
     prompt?: string;
     project_id?: string | null;
     tone?: string;
     conversation_id?: string | null;
     retry_position?: number | null;
+    compare_follow_up?: boolean;
   };
 
   const modelIds = normalizeModelIds(body.model_ids);
@@ -98,7 +100,20 @@ export async function POST(req: NextRequest) {
     retry_position >= 0 &&
     modelIds.length === 1;
 
-  if (!isRetry && bodyConversationId && retry_position !== undefined) {
+  const isFollowUp =
+    rawFollowUp === true &&
+    typeof bodyConversationId === "string" &&
+    bodyConversationId.length > 0 &&
+    !isRetry;
+
+  if (isRetry && rawFollowUp === true) {
+    return new Response(
+      JSON.stringify({ error: "Cannot combine retry and compare_follow_up" }),
+      { status: 400 }
+    );
+  }
+
+  if (!isRetry && bodyConversationId && typeof retry_position === "number") {
     return new Response(
       JSON.stringify({
         error:
@@ -282,6 +297,8 @@ export async function POST(req: NextRequest) {
 
   let conversationId: string;
   let positions: number[];
+  /** Written on new model_responses rows (0 = first compare round). */
+  let insertRoundIndex = 0;
 
   if (isRetry) {
     const { data: conv, error: convErr } = await serviceClient
@@ -318,6 +335,58 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+  } else if (isFollowUp) {
+    const { data: conv, error: convErr } = await serviceClient
+      .from("conversations")
+      .select("id, user_id, mode, project_id")
+      .eq("id", bodyConversationId)
+      .single();
+    if (convErr || !conv || (conv as { user_id: string }).user_id !== user.id) {
+      return new Response(JSON.stringify({ error: "Conversation not found" }), {
+        status: 404,
+      });
+    }
+    if ((conv as { mode: string }).mode !== "compare") {
+      return new Response(JSON.stringify({ error: "Not a compare conversation" }), {
+        status: 400,
+      });
+    }
+    conversationId = bodyConversationId;
+
+    const { data: maxPosRow } = await serviceClient
+      .from("model_responses")
+      .select("position")
+      .eq("conversation_id", conversationId)
+      .order("position", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const startPos =
+      ((maxPosRow as { position: number } | null)?.position ?? -1) + 1;
+
+    const { data: maxRoundRow } = await serviceClient
+      .from("model_responses")
+      .select("round_index")
+      .eq("conversation_id", conversationId)
+      .order("round_index", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const nextRound =
+      ((maxRoundRow as { round_index: number } | null)?.round_index ?? -1) + 1;
+    insertRoundIndex = nextRound;
+
+    const { error: msgError } = await serviceClient.from("messages").insert({
+      conversation_id: conversationId,
+      role: "user",
+      content: prompt,
+    });
+    if (msgError) {
+      return new Response(
+        JSON.stringify({ error: `Failed to save follow-up: ${msgError.message}` }),
+        { status: 500 }
+      );
+    }
+
+    positions = modelIds.map((_, i) => startPos + i);
   } else {
     const title = prompt.trim().slice(0, 80);
     const { data: conv, error: convError } = await serviceClient
@@ -327,6 +396,7 @@ export async function POST(req: NextRequest) {
         project_id: resolvedProjectId,
         title,
         mode: "compare",
+        type: "compare",
         provider: modelIds[0]!.provider,
         model: modelIds[0]!.model,
       })
@@ -356,6 +426,7 @@ export async function POST(req: NextRequest) {
     }
 
     positions = modelIds.map((_, i) => i);
+    insertRoundIndex = 0;
   }
 
   const encoder = new TextEncoder();
@@ -375,7 +446,34 @@ export async function POST(req: NextRequest) {
         type: "meta",
         conversation_id: conversationId,
         is_retry: isRetry,
+        is_follow_up: isFollowUp,
       });
+
+      const priorByModel = new Map<
+        string,
+        { round_index: number; content: string }[]
+      >();
+      if (isFollowUp && insertRoundIndex > 0) {
+        const { data: allPrior } = await serviceClient
+          .from("model_responses")
+          .select("provider, model, round_index, content")
+          .eq("conversation_id", conversationId)
+          .lt("round_index", insertRoundIndex)
+          .order("round_index", { ascending: true });
+        for (const row of (allPrior ?? []) as {
+          provider: string;
+          model: string;
+          round_index: number;
+          content: string;
+        }[]) {
+          const pk = `${row.provider}::${row.model}`;
+          if (!priorByModel.has(pk)) priorByModel.set(pk, []);
+          priorByModel.get(pk)!.push({
+            round_index: row.round_index,
+            content: row.content,
+          });
+        }
+      }
 
       const PER_MEMBER_TIMEOUT_MS = 300_000;
 
@@ -383,6 +481,20 @@ export async function POST(req: NextRequest) {
         const key = `${spec.provider}::${spec.model}::${position}`;
         const startedAt = Date.now();
         const conn = connByProvider.get(spec.provider);
+
+        const priorKey = `${spec.provider}::${spec.model}`;
+        const priorSlices = priorByModel.get(priorKey) ?? [];
+        let userContent = prompt;
+        if (isFollowUp && priorSlices.length > 0) {
+          const recap = priorSlices
+            .sort((a, b) => a.round_index - b.round_index)
+            .map(
+              (r, i) =>
+                `Round ${i + 1} — your prior answer:\n${r.content}`
+            )
+            .join("\n\n---\n\n");
+          userContent = `${recap}\n\n---\n\nNew question:\n${prompt}`;
+        }
 
         let apiKey: string | null = null;
         let baseUrl: string | null = null;
@@ -418,6 +530,7 @@ export async function POST(req: NextRequest) {
                 latency_ms,
                 error: errMsg,
                 position,
+                round_index: insertRoundIndex,
               });
             }
             return;
@@ -449,6 +562,7 @@ export async function POST(req: NextRequest) {
                 latency_ms,
                 error: errMsg,
                 position,
+                round_index: insertRoundIndex,
               });
             }
             return;
@@ -479,6 +593,7 @@ export async function POST(req: NextRequest) {
                 latency_ms,
                 error: msg,
                 position,
+                round_index: insertRoundIndex,
               });
             }
             return;
@@ -501,7 +616,7 @@ export async function POST(req: NextRequest) {
             model: spec.model,
             apiKey,
             baseUrl: baseUrl ?? undefined,
-            messages: [{ role: "user", content: prompt }],
+            messages: [{ role: "user", content: userContent }],
             systemPrompt: systemPrompt || undefined,
           });
 
@@ -554,6 +669,7 @@ export async function POST(req: NextRequest) {
               latency_ms,
               error: null,
               position,
+              round_index: insertRoundIndex,
             });
           }
 
@@ -598,13 +714,14 @@ export async function POST(req: NextRequest) {
               latency_ms,
               error: message,
               position,
+              round_index: insertRoundIndex,
             });
           }
         }
       };
 
       const tasks = modelIds.map((spec, idx) => {
-        const position = isRetry ? positions[0]! : idx;
+        const position = isRetry ? positions[0]! : positions[idx]!;
         const key = `${spec.provider}::${spec.model}::${position}`;
         return Promise.race([
           runOne(spec, position),

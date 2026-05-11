@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, X, Loader2, Sparkles, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { RestoreSessionBanner } from "@/components/session/restore-session-banner";
+import {
+  LETTIB_STATE_MANUAL_COMPARE,
+  SESSION_STATE_TTL_MS,
+} from "@/lib/session/keys";
 
 const SOURCE_OPTIONS = [
   "ChatGPT",
@@ -53,8 +58,17 @@ function newBox(source: (typeof SOURCE_OPTIONS)[number] = "ChatGPT"): PasteBox {
   };
 }
 
+type ManualCompareStoredV1 = {
+  v: 1;
+  savedAt: number;
+  prompt: string;
+  tone: (typeof TONE_OPTIONS)[number];
+  boxes: PasteBox[];
+};
+
 export default function ManualComparePage() {
   const router = useRouter();
+  const hydratedRef = useRef(false);
   const [prompt, setPrompt] = useState("");
   const [tone, setTone] =
     useState<(typeof TONE_OPTIONS)[number]>("professional");
@@ -64,6 +78,54 @@ export default function ManualComparePage() {
   ]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showRestoreBanner, setShowRestoreBanner] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || hydratedRef.current) return;
+    try {
+      const raw = sessionStorage.getItem(LETTIB_STATE_MANUAL_COMPARE);
+      if (!raw) return;
+      const s = JSON.parse(raw) as ManualCompareStoredV1;
+      if (s.v !== 1 || !Array.isArray(s.boxes)) return;
+      if (Date.now() - s.savedAt > SESSION_STATE_TTL_MS) {
+        sessionStorage.removeItem(LETTIB_STATE_MANUAL_COMPARE);
+        return;
+      }
+      hydratedRef.current = true;
+      setPrompt(s.prompt);
+      if (TONE_OPTIONS.includes(s.tone)) setTone(s.tone);
+      if (s.boxes.length >= MIN_BOXES) setBoxes(s.boxes);
+      setShowRestoreBanner(true);
+    } catch {
+      try {
+        sessionStorage.removeItem(LETTIB_STATE_MANUAL_COMPARE);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const t = window.setTimeout(() => {
+      try {
+        const payload: ManualCompareStoredV1 = {
+          v: 1,
+          savedAt: Date.now(),
+          prompt,
+          tone,
+          boxes,
+        };
+        sessionStorage.setItem(
+          LETTIB_STATE_MANUAL_COMPARE,
+          JSON.stringify(payload)
+        );
+      } catch {
+        /* ignore */
+      }
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [prompt, tone, boxes]);
 
   function addBox() {
     if (boxes.length >= MAX_BOXES) return;
@@ -113,6 +175,18 @@ export default function ManualComparePage() {
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
+      {showRestoreBanner && (
+        <RestoreSessionBanner
+          onDismiss={() => {
+            setShowRestoreBanner(false);
+            try {
+              sessionStorage.removeItem(LETTIB_STATE_MANUAL_COMPARE);
+            } catch {
+              /* ignore */
+            }
+          }}
+        />
+      )}
       <div className="space-y-1">
         <h1 className="text-3xl font-bold tracking-tight">Manual Compare</h1>
         <p className="text-muted-foreground">

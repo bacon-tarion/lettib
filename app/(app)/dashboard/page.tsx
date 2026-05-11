@@ -1,13 +1,12 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { MessageSquare, GitCompare, FolderPlus } from "lucide-react";
+import { MessageSquare, GitCompare, FolderPlus, Sparkles } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { ProjectCard } from "@/components/projects/project-card";
 import { createClient } from "@/lib/supabase/server";
 import { listTeams } from "@/app/(app)/teams/actions";
-import { listConversationsForUser } from "@/lib/conversations/queries";
-import { getModelDisplayName, getProviderLabel } from "@/lib/providers/models";
+import { fetchRecentActivityMerged } from "@/lib/dashboard/recent-activity";
+import { getProviderLabel } from "@/lib/providers/models";
 import { getUserUsageSnapshot } from "@/lib/usage/queries";
 
 function formatRelative(dateStr: string) {
@@ -20,9 +19,10 @@ function formatRelative(dateStr: string) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-const modeIcons = {
+const activityIcons = {
   chat: MessageSquare,
   compare: GitCompare,
+  synthesis: Sparkles,
 } as const;
 
 const quickActions = [
@@ -52,7 +52,7 @@ export default async function DashboardPage() {
       .eq("archived", false)
       .order("updated_at", { ascending: false })
       .limit(4),
-    listConversationsForUser({ userId: user.id, limit: 8 }),
+    fetchRecentActivityMerged(user.id, 10),
     getUserUsageSnapshot(),
     listTeams(),
   ]);
@@ -131,40 +131,29 @@ export default async function DashboardPage() {
             </h2>
             {recentActivity.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2">
-                No conversations yet. Start a chat or compare to see activity here.
+                No recent activity. Start a chat or compare to get started.
               </p>
             ) : (
               <div className="space-y-0.5">
-                {recentActivity.map((c) => {
-                  const Icon = modeIcons[c.mode] ?? MessageSquare;
+                {recentActivity.map((item) => {
+                  const Icon = activityIcons[item.kind] ?? MessageSquare;
                   return (
                     <Link
-                      key={c.id}
-                      href={`/chat/${c.id}`}
+                      key={`${item.kind}-${item.id}`}
+                      href={item.href}
                       className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors"
                     >
                       <div className="rounded-md bg-muted p-1.5 shrink-0">
                         <Icon className="h-3.5 w-3.5 text-muted-foreground" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{c.title}</p>
+                        <p className="text-sm font-medium truncate">{item.title}</p>
                         <p className="text-xs text-muted-foreground truncate">
-                          {c.project_name ?? "No project"} ·{" "}
-                          {c.message_count} msg · ${c.cost_usd.toFixed(4)}
+                          {item.subtitle}
                         </p>
                       </div>
-                      <div className="flex gap-1 shrink-0">
-                        {c.provider && c.model && (
-                          <Badge
-                            variant="secondary"
-                            className="text-[10px] px-1.5 py-0"
-                          >
-                            {getModelDisplayName(c.provider, c.model)}
-                          </Badge>
-                        )}
-                      </div>
                       <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
-                        {formatRelative(c.updated_at)}
+                        {formatRelative(item.updated_at)}
                       </span>
                     </Link>
                   );
