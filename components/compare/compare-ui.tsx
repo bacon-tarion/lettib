@@ -292,8 +292,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             scores,
           });
         }
-        for (const [, arr] of byRoundIdx) {
-          arr.sort((a, b) => a.position - b.position);
+        for (const [, arr] of Array.from(byRoundIdx.entries())) {
+          arr.sort((a: ResponseState, b: ResponseState) => a.position - b.position);
         }
 
         const built: CompareRound[] = [];
@@ -1392,7 +1392,6 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                 className="resize-none min-h-[80px]"
                 value={followUpPrompt}
                 onChange={(e) => setFollowUpPrompt(e.target.value)}
-                disabled={phase === "streaming" || phase === "saving"}
               />
               <Button
                 type="button"
@@ -1402,8 +1401,6 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                 disabled={
                   !followUpPrompt.trim() ||
                   selectedModels.length === 0 ||
-                  phase === "streaming" ||
-                  phase === "saving" ||
                   !!retryingKey
                 }
               >

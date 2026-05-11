@@ -18,6 +18,16 @@ function snippet(text: string, max = 72) {
   return `${t.slice(0, max - 1)}…`;
 }
 
+/** Supabase FK embed `projects(name)` may type as object or array depending on client inference. */
+function embedProjectName(projects: unknown): string | null {
+  if (!projects) return null;
+  if (Array.isArray(projects)) {
+    const first = projects[0] as { name?: string } | undefined;
+    return first?.name ?? null;
+  }
+  return (projects as { name?: string }).name ?? null;
+}
+
 /**
  * Last `limit` items across chat conversations, compare sessions, and syntheses,
  * merged by recency (uses conversations.updated_at, syntheses.created_at).
@@ -55,22 +65,22 @@ export async function fetchRecentActivityMerged(
       .limit(10),
   ]);
 
-  const chats = (chatsRes.data ?? []) as {
+  const chats = (chatsRes.data ?? []) as unknown as {
     id: string;
     title: string;
     model: string | null;
     provider: string | null;
     project_id: string | null;
     updated_at: string;
-    projects: { name: string } | null;
+    projects: unknown;
   }[];
 
-  const compares = (comparesRes.data ?? []) as {
+  const compares = (comparesRes.data ?? []) as unknown as {
     id: string;
     title: string;
     project_id: string | null;
     updated_at: string;
-    projects: { name: string } | null;
+    projects: unknown;
   }[];
 
   const compareIds = compares.map((c) => c.id);
@@ -91,19 +101,19 @@ export async function fetchRecentActivityMerged(
         .get(row.conversation_id)!
         .add(getModelDisplayName(row.provider, row.model));
     }
-    for (const [cid, set] of map) {
-      modelLabelsByConv.set(cid, [...set].slice(0, 4).join(", "));
+    for (const [cid, set] of Array.from(map.entries())) {
+      modelLabelsByConv.set(cid, Array.from(set).slice(0, 4).join(", "));
     }
   }
 
-  const synths = (synthsRes.data ?? []) as {
+  const synths = (synthsRes.data ?? []) as unknown as {
     id: string;
     prompt: string;
     tone: string;
     cost_usd: number;
     created_at: string;
     project_id: string | null;
-    projects: { name: string } | null;
+    projects: unknown;
   }[];
 
   const merged: RecentActivityRow[] = [];
@@ -117,7 +127,7 @@ export async function fetchRecentActivityMerged(
       kind: "chat",
       id: c.id,
       title: c.title || "Chat",
-      subtitle: `${modelLabel} · ${c.projects?.name ?? "No project"}`,
+      subtitle: `${modelLabel} · ${embedProjectName(c.projects) ?? "No project"}`,
       updated_at: c.updated_at,
       href: `/chat?conversation=${encodeURIComponent(c.id)}`,
     });
@@ -129,7 +139,7 @@ export async function fetchRecentActivityMerged(
       id: c.id,
       title: snippet(c.title || "Compare"),
       subtitle: `${modelLabelsByConv.get(c.id) || "Models"} · ${
-        c.projects?.name ?? "No project"
+        embedProjectName(c.projects) ?? "No project"
       }`,
       updated_at: c.updated_at,
       href: `/compare?c=${encodeURIComponent(c.id)}`,
@@ -142,7 +152,7 @@ export async function fetchRecentActivityMerged(
       id: s.id,
       title: snippet(s.prompt),
       subtitle: `${s.tone} · $${Number(s.cost_usd).toFixed(4)} · ${
-        s.projects?.name ?? "No project"
+        embedProjectName(s.projects) ?? "No project"
       }`,
       updated_at: s.created_at,
       href: `/synthesis/${s.id}`,
