@@ -11,6 +11,7 @@ import {
 } from "@/lib/providers/models";
 import { cn } from "@/lib/utils";
 import { Sparkles } from "lucide-react";
+import { SynthesisMarkdown } from "@/components/synthesis/synthesis-markdown";
 
 export const dynamic = "force-dynamic";
 
@@ -151,11 +152,7 @@ export default async function PublicSharePage({
           </div>
         )}
 
-        <div className="prose prose-sm max-w-none dark:prose-invert">
-          <p className="text-base leading-relaxed whitespace-pre-wrap">
-            {synthesis.content}
-          </p>
-        </div>
+        <SynthesisMarkdown content={synthesis.content} />
 
         {synthesis.provider && (
           <div className="text-xs text-muted-foreground">

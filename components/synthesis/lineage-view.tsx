@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { LineageSentence } from "@/lib/synthesis/lineage";
+import { SynthesisMarkdown } from "@/components/synthesis/synthesis-markdown";
 
 interface Props {
   content: string;
@@ -52,13 +53,7 @@ export function LineageView({ content, lineage }: Props) {
   const hasLineage = lineage.length > 0;
 
   if (!hasLineage) {
-    return (
-      <div className="prose prose-sm max-w-none dark:prose-invert">
-        <p className="text-base leading-relaxed whitespace-pre-wrap">
-          {content}
-        </p>
-      </div>
-    );
+    return <SynthesisMarkdown content={content} />;
   }
 
   return (
@@ -110,9 +105,7 @@ export function LineageView({ content, lineage }: Props) {
             ))}
           </p>
         ) : (
-          <p className="text-base leading-relaxed whitespace-pre-wrap">
-            {lineage.map((l) => l.sentence).join(" ")}
-          </p>
+          <SynthesisMarkdown content={content} />
         )}
       </div>
     </div>
