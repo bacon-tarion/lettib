@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
-import { createGroq } from "@ai-sdk/groq";
+import { createOpenAI } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createXai } from "@ai-sdk/xai";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import { getServerApiKey } from "@/lib/providers";
-import {
-  SYNTHESIS_PROMPT,
-} from "@/lib/prompts/synthesis";
+import { MODELS_CATALOG } from "@/lib/providers/models";
+import { SYNTHESIS_PROMPT } from "@/lib/prompts/synthesis";
 import {
   extractConflictsBlock,
   parseLineage,
@@ -15,15 +16,24 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Manual Compare synthesis uses built-in Groq (GROQ_API_KEY) so users need no keys.
-const SYNTH_PROVIDER = "groq";
-const SYNTH_MODEL = "llama-3.3-70b-versatile";
-
 interface ManualResponseInput {
   source: string;
   customName?: string;
   content: string;
 }
+
+/** Map paste "Source" labels to API providers (only these may be used for synthesis). */
+const SOURCE_TO_API_PROVIDER: Record<
+  string,
+  "openai" | "anthropic" | "google" | "xai" | undefined
+> = {
+  ChatGPT: "openai",
+  Claude: "anthropic",
+  Gemini: "google",
+  Grok: "xai",
+  Perplexity: undefined,
+  Custom: undefined,
+};
 
 const SOURCE_TO_SLUG: Record<string, string> = {
   ChatGPT: "gpt",
@@ -37,12 +47,72 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "source";
 }
 
+function calcCost(provider: string, model: string, tin: number, tout: number) {
+  const catalog = MODELS_CATALOG as Record<
+    string,
+    readonly { id: string; cost_in: number; cost_out: number }[]
+  >;
+  const entry = catalog[provider]?.find((m) => m.id === model);
+  if (!entry) return 0;
+  return (entry.cost_in * tin) / 1_000_000 + (entry.cost_out * tout) / 1_000_000;
+}
+
+function defaultModelForProvider(provider: string): string {
+  const catalog = MODELS_CATALOG as Record<string, readonly { id: string }[]>;
+  const first = catalog[provider]?.[0];
+  if (!first) throw new Error(`No catalog model for provider: ${provider}`);
+  return first.id;
+}
+
+type ConnRow = {
+  provider: string;
+  vault_secret_id: string;
+  custom_base_url: string | null;
+  custom_model_name: string | null;
+};
+
 /**
- * Build unique slugs for the pasted responses. Custom sources use a slugified
- * version of their name; standard sources map to canonical slugs. Duplicates
- * (e.g. two ChatGPT pastes) get -1/-2 suffixes so lineage tags can target a
- * specific paste.
+ * Unique API providers implied by the user's source labels, in first-appearance order.
+ * Excludes groq — Manual Compare never uses host Groq env keys.
  */
+function preferredApiProvidersFromResponses(
+  responses: ManualResponseInput[]
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const r of responses) {
+    const p = SOURCE_TO_API_PROVIDER[r.source];
+    if (!p) continue;
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
+}
+
+async function buildModelInstance(
+  provider: string,
+  model: string,
+  apiKey: string,
+  baseUrl?: string | null
+) {
+  switch (provider) {
+    case "openai":
+      return createOpenAI({ apiKey })(model);
+    case "anthropic":
+      return createAnthropic({ apiKey })(model);
+    case "google":
+      return createGoogleGenerativeAI({ apiKey })(model);
+    case "xai":
+      return createXai({ apiKey })(model);
+    case "custom":
+      if (!baseUrl) throw new Error("baseUrl required for custom provider");
+      return createOpenAI({ apiKey, baseURL: baseUrl })(model);
+    default:
+      throw new Error(`Unsupported synthesis provider: ${provider}`);
+  }
+}
+
 function buildSlugs(items: ManualResponseInput[]): string[] {
   const bases = items.map((it) =>
     it.source === "Custom"
@@ -71,14 +141,6 @@ export async function POST(req: NextRequest) {
   } = await supabase.auth.getUser();
   if (authError || !user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const apiKey = getServerApiKey("groq");
-  if (!apiKey?.trim()) {
-    return NextResponse.json(
-      { error: "Manual Compare is not configured (GROQ_API_KEY missing)." },
-      { status: 500 }
-    );
   }
 
   const body = (await req.json().catch(() => ({}))) as {
@@ -113,7 +175,6 @@ export async function POST(req: NextRequest) {
 
   const serviceClient = createServiceClient();
 
-  // If a project_id is supplied, verify ownership before linking
   if (projectId) {
     const { data: proj } = await serviceClient
       .from("projects")
@@ -128,7 +189,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Optional project context for the prompt
   let projectContext = "(no project context)";
   if (projectId) {
     const { data: project } = await serviceClient
@@ -144,6 +204,86 @@ export async function POST(req: NextRequest) {
         .filter(Boolean)
         .join(" — ");
     }
+  }
+
+  const { data: connections } = await serviceClient
+    .from("api_connections")
+    .select("provider, vault_secret_id, custom_base_url, custom_model_name")
+    .eq("user_id", user.id)
+    .in("status", ["connected", "untested"]);
+
+  const connByProvider = new Map<string, ConnRow>();
+  for (const c of (connections ?? []) as ConnRow[]) {
+    if (c.provider === "groq") continue;
+    connByProvider.set(c.provider, c);
+  }
+
+  const preferred = preferredApiProvidersFromResponses(responses);
+  if (preferred.length === 0) {
+    return NextResponse.json(
+      {
+        error:
+          "Label at least one pasted response as ChatGPT, Claude, Gemini, or Grok so we can use your matching API connection for synthesis (Custom / Perplexity alone cannot pick a provider).",
+      },
+      { status: 400 }
+    );
+  }
+
+  let synthProvider: string | null = null;
+  let synthConn: ConnRow | null = null;
+  for (const p of preferred) {
+    const row = connByProvider.get(p);
+    if (row) {
+      synthProvider = p;
+      synthConn = row;
+      break;
+    }
+  }
+
+  if (!synthProvider || !synthConn) {
+    const need = preferred
+      .map((p) =>
+        p === "openai"
+          ? "OpenAI (ChatGPT)"
+          : p === "anthropic"
+            ? "Anthropic (Claude)"
+            : p === "google"
+              ? "Google (Gemini)"
+              : p === "xai"
+                ? "xAI (Grok)"
+                : p
+      )
+      .join(", ");
+    return NextResponse.json(
+      {
+        error: `No connected API key for your labeled sources. Connect one of: ${need} in Settings, then try again.`,
+      },
+      { status: 400 }
+    );
+  }
+
+  const synthModel =
+    synthProvider === "custom"
+      ? synthConn.custom_model_name || "custom"
+      : defaultModelForProvider(synthProvider);
+
+  const { data: vaultKey, error: vaultError } = await serviceClient.rpc(
+    "lettib_read_secret",
+    { p_secret_id: synthConn.vault_secret_id }
+  );
+  if (vaultError || !vaultKey) {
+    return NextResponse.json(
+      { error: "Could not read API key for synthesis. Re-save your connection in Settings." },
+      { status: 500 }
+    );
+  }
+  const apiKey =
+    typeof vaultKey === "string" ? vaultKey.trim() : String(vaultKey).trim();
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: "Stored API key is empty. Update your connection in Settings." },
+      { status: 500 }
+    );
   }
 
   const slugs = buildSlugs(responses);
@@ -165,7 +305,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const startedAt = Date.now();
-    const model = createGroq({ apiKey })(SYNTH_MODEL);
+    const model = await buildModelInstance(
+      synthProvider,
+      synthModel,
+      apiKey,
+      synthConn.custom_base_url
+    );
 
     const result = await generateText({
       model,
@@ -174,7 +319,7 @@ export async function POST(req: NextRequest) {
 
     const tokensIn = result.usage?.promptTokens ?? 0;
     const tokensOut = result.usage?.completionTokens ?? 0;
-    const cost = 0;
+    const cost = calcCost(synthProvider, synthModel, tokensIn, tokensOut);
     const latency = Date.now() - startedAt;
 
     const { conflicts, bodyWithoutBlock } = extractConflictsBlock(result.text);
@@ -188,8 +333,8 @@ export async function POST(req: NextRequest) {
         project_id: projectId,
         prompt,
         content: bodyWithoutBlock,
-        provider: SYNTH_PROVIDER,
-        model: SYNTH_MODEL,
+        provider: synthProvider,
+        model: synthModel,
         tone,
         tokens_in: tokensIn,
         tokens_out: tokensOut,
@@ -214,8 +359,8 @@ export async function POST(req: NextRequest) {
       user_id: user.id,
       conversation_id: null,
       action: "synthesis_manual",
-      provider: SYNTH_PROVIDER,
-      model: SYNTH_MODEL,
+      provider: synthProvider,
+      model: synthModel,
       tokens_in: tokensIn,
       tokens_out: tokensOut,
       cost_usd: cost,

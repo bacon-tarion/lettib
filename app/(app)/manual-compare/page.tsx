@@ -116,7 +116,9 @@ export default function ManualComparePage() {
       <div className="space-y-1">
         <h1 className="text-3xl font-bold tracking-tight">Manual Compare</h1>
         <p className="text-muted-foreground">
-          Paste responses from any AI — no API keys needed.
+          Paste outputs from any assistant. Synthesis runs through your connected
+          API that matches the source you pick (e.g. Claude → Anthropic, ChatGPT
+          → OpenAI).
         </p>
       </div>
 
