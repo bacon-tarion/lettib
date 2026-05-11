@@ -17,6 +17,21 @@ export const COMPARE_MODELS_BY_PLAN = {
   power: 6,
 } as const;
 
+/** Max parallel models in Compare for a `profiles.subscription_tier` value. */
+export function maxCompareModelsForSubscriptionTier(
+  tier: string | null | undefined
+): number {
+  switch (tier) {
+    case "pro":
+      return COMPARE_MODELS_BY_PLAN.pro;
+    case "power":
+    case "lifetime_byok":
+      return COMPARE_MODELS_BY_PLAN.power;
+    default:
+      return COMPARE_MODELS_BY_PLAN.free;
+  }
+}
+
 /** Stripe Dashboard price lookup keys (Products → Prices). */
 export const STRIPE_PRICE_LOOKUP_KEYS = {
   pro: "pro_monthly",

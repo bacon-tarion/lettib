@@ -4,6 +4,9 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { streamChat, getServerApiKey } from "@/lib/providers";
 import { MEMORY_INJECTION_PROMPT } from "@/lib/prompts/synthesis";
 import { FREE_COMPARE_LIMIT } from "@/lib/usage/limits";
+import { maxCompareModelsForSubscriptionTier } from "@/lib/pricing";
+import { MODELS_CATALOG } from "@/lib/providers/models";
+import { calcCompareModelCost } from "@/lib/compare/cost";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,12 +20,38 @@ const TONE_MAP: Record<string, string> = {
   persuasive: "Respond in a persuasive, compelling tone.",
 };
 
-type TeamMemberRow = {
-  id: string;
-  provider: string;
-  model: string;
-  position: number;
-};
+type ModelSpec = { provider: string; model: string };
+
+function normalizeModelIds(raw: unknown): ModelSpec[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const out: ModelSpec[] = [];
+  for (const item of raw) {
+    if (typeof item === "string" && item.includes("::")) {
+      const idx = item.indexOf("::");
+      const provider = item.slice(0, idx).toLowerCase();
+      const model = item.slice(idx + 2);
+      if (provider && model) out.push({ provider, model });
+    } else if (item && typeof item === "object") {
+      const o = item as { provider?: unknown; model?: unknown };
+      const provider = o.provider != null ? String(o.provider).toLowerCase() : "";
+      const model = o.model != null ? String(o.model) : "";
+      if (provider && model) out.push({ provider, model });
+    }
+  }
+  if (out.length === 0) return null;
+  const seen = new Set<string>();
+  return out.filter((m) => {
+    const k = `${m.provider}::${m.model}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function catalogHasModel(provider: string, model: string): boolean {
+  const catalog = MODELS_CATALOG as Record<string, readonly { id: string }[]>;
+  return !!catalog[provider]?.some((m) => m.id === model);
+}
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -38,25 +67,67 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { prompt, team_id, project_id, tone } = body as {
+  const {
+    prompt,
+    project_id,
+    tone,
+    conversation_id: bodyConversationId,
+    retry_position,
+  } = body as {
     prompt?: string;
-    team_id?: string;
     project_id?: string | null;
     tone?: string;
+    conversation_id?: string | null;
+    retry_position?: number | null;
   };
 
-  if (!prompt?.trim() || !team_id) {
+  const modelIds = normalizeModelIds(body.model_ids);
+  if (!prompt?.trim() || !modelIds) {
     return new Response(
-      JSON.stringify({ error: "prompt and team_id are required" }),
+      JSON.stringify({ error: "prompt and model_ids[] are required" }),
+      { status: 400 }
+    );
+  }
+
+  const isRetry =
+    typeof bodyConversationId === "string" &&
+    bodyConversationId.length > 0 &&
+    typeof retry_position === "number" &&
+    retry_position >= 0 &&
+    modelIds.length === 1;
+
+  if (!isRetry && bodyConversationId && retry_position !== undefined) {
+    return new Response(
+      JSON.stringify({
+        error:
+          "retry requires conversation_id, retry_position, and exactly one model in model_ids",
+      }),
       { status: 400 }
     );
   }
 
   const serviceClient = createServiceClient();
 
+  const { data: profile } = await serviceClient
+    .from("profiles")
+    .select("subscription_tier")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  const tier = (profile as { subscription_tier?: string } | null)
+    ?.subscription_tier;
+  const maxModels = maxCompareModelsForSubscriptionTier(tier);
+  if (!isRetry && modelIds.length > maxModels) {
+    return new Response(
+      JSON.stringify({
+        error: `Your plan allows up to ${maxModels} models per compare.`,
+        max_models: maxModels,
+      }),
+      { status: 400 }
+    );
+  }
+
   // ── Free-tier compare limit ───────────────────────────────────────────────
-  // Users with NO paid api connections (any provider other than groq) are
-  // capped at FREE_COMPARE_LIMIT compares per calendar month.
   const { data: paidConns } = await serviceClient
     .from("api_connections")
     .select("provider")
@@ -64,7 +135,7 @@ export async function POST(req: NextRequest) {
     .in("status", ["connected", "untested"])
     .neq("provider", "groq");
   const isFreeTier = !paidConns || paidConns.length === 0;
-  if (isFreeTier) {
+  if (isFreeTier && !isRetry) {
     const monthStart = new Date();
     monthStart.setUTCDate(1);
     monthStart.setUTCHours(0, 0, 0, 0);
@@ -86,58 +157,76 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Fetch team members
-  const { data: team, error: teamError } = await serviceClient
-    .from("ai_teams")
-    .select("id, user_id, name")
-    .eq("id", team_id)
-    .single();
-
-  if (teamError || !team || (team as { user_id: string }).user_id !== user.id) {
-    return new Response(JSON.stringify({ error: "Team not found" }), {
-      status: 404,
-    });
-  }
-
-  const { data: members } = await serviceClient
-    .from("ai_team_members")
-    .select("id, provider, model, position")
-    .eq("ai_team_id", team_id)
-    .order("position", { ascending: true });
-
-  const teamMembers = (members ?? []) as TeamMemberRow[];
-  if (teamMembers.length === 0) {
-    return new Response(
-      JSON.stringify({ error: "Team has no members" }),
-      { status: 400 }
-    );
-  }
-
-  // Fetch all api_connections for this user (we'll match by provider per member)
   const { data: connections } = await serviceClient
     .from("api_connections")
-    .select("provider, vault_secret_id, custom_base_url, status")
+    .select("provider, vault_secret_id, custom_base_url, status, custom_model_name")
     .eq("user_id", user.id)
     .in("status", ["connected", "untested"]);
 
-  const connByProvider = new Map<
-    string,
-    { vault_secret_id: string; custom_base_url: string | null }
-  >();
-  for (const c of (connections ?? []) as {
+  type ConnRow = {
     provider: string;
     vault_secret_id: string;
     custom_base_url: string | null;
-  }[]) {
-    connByProvider.set(c.provider, {
-      vault_secret_id: c.vault_secret_id,
-      custom_base_url: c.custom_base_url,
-    });
+    custom_model_name: string | null;
+  };
+  const connByProvider = new Map<string, ConnRow>();
+  for (const c of (connections ?? []) as ConnRow[]) {
+    connByProvider.set(c.provider, c);
   }
 
-  // Build optional memory + tone system prompt
-  let systemPrompt = tone ? (TONE_MAP[tone] ?? "") : "";
+  for (const m of modelIds) {
+    if (m.provider === "custom") {
+      const conn = connByProvider.get("custom");
+      const expected = conn?.custom_model_name || "custom";
+      if (!conn || m.model !== expected) {
+        return new Response(
+          JSON.stringify({
+            error: `Invalid or unconnected custom model: ${m.model}`,
+          }),
+          { status: 400 }
+        );
+      }
+      continue;
+    }
+    if (!catalogHasModel(m.provider, m.model)) {
+      return new Response(
+        JSON.stringify({
+          error: `Unknown model ${m.provider}/${m.model}`,
+        }),
+        { status: 400 }
+      );
+    }
+  }
+
+  // Resolve project
+  let resolvedProjectId: string | null = null;
   if (project_id) {
+    const { data: ownedProject } = await serviceClient
+      .from("projects")
+      .select("id")
+      .eq("id", project_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!ownedProject) {
+      return new Response(
+        JSON.stringify({ error: "Project not found or not owned by user" }),
+        { status: 403 }
+      );
+    }
+    resolvedProjectId = (ownedProject as { id: string }).id;
+  } else {
+    const { data: inbox } = await serviceClient
+      .from("projects")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("name", "Inbox")
+      .limit(1)
+      .maybeSingle();
+    resolvedProjectId = (inbox as { id: string } | null)?.id ?? null;
+  }
+
+  let systemPrompt = tone ? (TONE_MAP[tone] ?? "") : "";
+  if (project_id && resolvedProjectId) {
     const { data: project } = await supabase
       .from("projects")
       .select("memory_enabled")
@@ -178,23 +267,104 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Inject project files (text-extracted at upload time, capped per-file).
     const { data: pf } = await serviceClient
       .from("project_files")
       .select("file_name, extracted_text")
       .eq("project_id", project_id)
       .eq("user_id", user.id)
       .not("extracted_text", "is", null);
-    const fileRows = (pf ?? []) as { file_name: string; extracted_text: string }[];
+    const fileRows = (pf ?? []) as {
+      file_name: string;
+      extracted_text: string;
+    }[];
     if (fileRows.length > 0) {
       const filesBlock = fileRows
-        .map((f) => `<file name="${f.file_name}">\n${f.extracted_text}\n</file>`)
+        .map(
+          (f) => `<file name="${f.file_name}">\n${f.extracted_text}\n</file>`
+        )
         .join("\n\n");
       systemPrompt = `Attached project files (use as reference context):\n${filesBlock}\n\n${systemPrompt}`;
     }
   }
 
-  // Stream all members in parallel as SSE
+  let conversationId: string;
+  let positions: number[];
+
+  if (isRetry) {
+    const { data: conv, error: convErr } = await serviceClient
+      .from("conversations")
+      .select("id, user_id, mode")
+      .eq("id", bodyConversationId)
+      .single();
+    if (convErr || !conv || (conv as { user_id: string }).user_id !== user.id) {
+      return new Response(JSON.stringify({ error: "Conversation not found" }), {
+        status: 404,
+      });
+    }
+    if ((conv as { mode: string }).mode !== "compare") {
+      return new Response(JSON.stringify({ error: "Not a compare conversation" }), {
+        status: 400,
+      });
+    }
+    conversationId = bodyConversationId;
+    positions = [retry_position!];
+    const spec = modelIds[0]!;
+    const { data: existingRow } = await serviceClient
+      .from("model_responses")
+      .select("id, provider, model")
+      .eq("conversation_id", conversationId)
+      .eq("position", retry_position!)
+      .maybeSingle();
+    const row = existingRow as { id: string; provider: string; model: string } | null;
+    if (
+      row &&
+      (row.provider !== spec.provider || row.model !== spec.model)
+    ) {
+      return new Response(
+        JSON.stringify({ error: "Model mismatch for retry position" }),
+        { status: 400 }
+      );
+    }
+  } else {
+    const title = prompt.trim().slice(0, 80);
+    const { data: conv, error: convError } = await serviceClient
+      .from("conversations")
+      .insert({
+        user_id: user.id,
+        project_id: resolvedProjectId,
+        title,
+        mode: "compare",
+        provider: modelIds[0]!.provider,
+        model: modelIds[0]!.model,
+      })
+      .select("id")
+      .single();
+
+    if (convError || !conv) {
+      return new Response(
+        JSON.stringify({
+          error: convError?.message ?? "Failed to create conversation",
+        }),
+        { status: 500 }
+      );
+    }
+    conversationId = (conv as { id: string }).id;
+
+    const { error: msgError } = await serviceClient.from("messages").insert({
+      conversation_id: conversationId,
+      role: "user",
+      content: prompt,
+    });
+    if (msgError) {
+      return new Response(
+        JSON.stringify({ error: `Failed to save prompt: ${msgError.message}` }),
+        { status: 500 }
+      );
+    }
+
+    positions = modelIds.map((_, i) => i);
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -208,16 +378,19 @@ export async function POST(req: NextRequest) {
         }
       };
 
+      enqueue({
+        type: "meta",
+        conversation_id: conversationId,
+        is_retry: isRetry,
+      });
+
       const PER_MEMBER_TIMEOUT_MS = 90_000;
 
-      const runMember = async (m: TeamMemberRow) => {
-        const key = `${m.provider}::${m.model}::${m.id}`;
+      const runOne = async (spec: ModelSpec, position: number) => {
+        const key = `${spec.provider}::${spec.model}::${position}`;
         const startedAt = Date.now();
+        const conn = connByProvider.get(spec.provider);
 
-        const conn = connByProvider.get(m.provider);
-
-        // Resolve API key. Prefer the user's own connected key. Fall back to
-        // server env keys for built-in free providers (groq, google).
         let apiKey: string | null = null;
         let baseUrl: string | null = null;
 
@@ -227,40 +400,81 @@ export async function POST(req: NextRequest) {
             { p_secret_id: conn.vault_secret_id }
           );
           if (vaultError || !vaultKey) {
+            const errMsg = "Could not decrypt API key.";
             enqueue({
               type: "error",
               key,
-              error: "Could not decrypt API key.",
+              error: errMsg,
             });
+            const latency_ms = Date.now() - startedAt;
+            if (isRetry) {
+              await serviceClient
+                .from("model_responses")
+                .update({ error: errMsg, latency_ms })
+                .eq("conversation_id", conversationId)
+                .eq("position", position);
+            } else {
+              await serviceClient.from("model_responses").insert({
+                conversation_id: conversationId,
+                provider: spec.provider,
+                model: spec.model,
+                content: "",
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_usd: 0,
+                latency_ms,
+                error: errMsg,
+                position,
+              });
+            }
             return;
           }
           apiKey = vaultKey as string;
           baseUrl = conn.custom_base_url ?? null;
         } else {
-          // No user connection — try server-side fallback for free providers.
-          apiKey = getServerApiKey(m.provider);
+          apiKey = getServerApiKey(spec.provider);
           if (!apiKey) {
-            enqueue({
-              type: "error",
-              key,
-              error: `${m.provider} is not connected. Add a key in Settings.`,
-            });
+            const msg = `${spec.provider} is not connected. Add a key in Settings.`;
+            enqueue({ type: "error", key, error: msg });
+            const latency_ms = Date.now() - startedAt;
+            if (isRetry) {
+              await serviceClient
+                .from("model_responses")
+                .update({ error: msg, latency_ms })
+                .eq("conversation_id", conversationId)
+                .eq("position", position);
+            } else {
+              await serviceClient.from("model_responses").insert({
+                conversation_id: conversationId,
+                provider: spec.provider,
+                model: spec.model,
+                content: "",
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_usd: 0,
+                latency_ms,
+                error: msg,
+                position,
+              });
+            }
             return;
           }
         }
 
-        try {
+        let accumulated = "";
+
+        const work = async () => {
           enqueue({ type: "start", key });
 
           const result = await streamChat({
-            provider: m.provider as
+            provider: spec.provider as
               | "openai"
               | "anthropic"
               | "google"
               | "xai"
               | "groq"
               | "custom",
-            model: m.model,
+            model: spec.model,
             apiKey,
             baseUrl: baseUrl ?? undefined,
             messages: [{ role: "user", content: prompt }],
@@ -268,32 +482,109 @@ export async function POST(req: NextRequest) {
           });
 
           for await (const chunk of result.textStream) {
+            accumulated += chunk;
             enqueue({ type: "chunk", key, text: chunk });
           }
 
           const usage = await result.usage;
+          const tokensIn = usage?.promptTokens ?? 0;
+          const tokensOut = usage?.completionTokens ?? 0;
+          const latency_ms = Date.now() - startedAt;
+          const cost_usd = calcCompareModelCost(
+            spec.provider,
+            spec.model,
+            tokensIn,
+            tokensOut
+          );
+
           enqueue({
             type: "done",
             key,
-            tokens_in: usage?.promptTokens ?? 0,
-            tokens_out: usage?.completionTokens ?? 0,
-            latency_ms: Date.now() - startedAt,
+            tokens_in: tokensIn,
+            tokens_out: tokensOut,
+            latency_ms,
           });
+
+          if (isRetry) {
+            await serviceClient
+              .from("model_responses")
+              .update({
+                content: accumulated,
+                tokens_in: tokensIn,
+                tokens_out: tokensOut,
+                cost_usd,
+                latency_ms,
+                error: null,
+              })
+              .eq("conversation_id", conversationId)
+              .eq("position", position);
+          } else {
+            await serviceClient.from("model_responses").insert({
+              conversation_id: conversationId,
+              provider: spec.provider,
+              model: spec.model,
+              content: accumulated,
+              tokens_in: tokensIn,
+              tokens_out: tokensOut,
+              cost_usd,
+              latency_ms,
+              error: null,
+              position,
+            });
+          }
+
+          await serviceClient.from("usage_logs").insert({
+            user_id: user.id,
+            conversation_id: conversationId,
+            action: "compare",
+            provider: spec.provider,
+            model: spec.model,
+            tokens_in: tokensIn,
+            tokens_out: tokensOut,
+            cost_usd,
+            latency_ms,
+          });
+        };
+
+        try {
+          await work();
         } catch (err) {
-          const message =
-            err instanceof Error ? err.message : "Stream failed";
+          const message = err instanceof Error ? err.message : "Stream failed";
           enqueue({ type: "error", key, error: message });
+          const latency_ms = Date.now() - startedAt;
+          if (isRetry) {
+            await serviceClient
+              .from("model_responses")
+              .update({
+                content: accumulated,
+                error: message,
+                latency_ms,
+              })
+              .eq("conversation_id", conversationId)
+              .eq("position", position);
+          } else {
+            await serviceClient.from("model_responses").insert({
+              conversation_id: conversationId,
+              provider: spec.provider,
+              model: spec.model,
+              content: accumulated,
+              tokens_in: 0,
+              tokens_out: 0,
+              cost_usd: 0,
+              latency_ms,
+              error: message,
+              position,
+            });
+          }
         }
       };
 
-      // Race each member against a timeout so one hanging provider can't
-      // stall the whole compare session. Orphaned work that finishes after
-      // timeout will hit the closed controller's try/catch in `enqueue`.
-      const tasks = teamMembers.map((m) => {
-        const key = `${m.provider}::${m.model}::${m.id}`;
+      const tasks = modelIds.map((spec, idx) => {
+        const position = isRetry ? positions[0]! : idx;
+        const key = `${spec.provider}::${spec.model}::${position}`;
         return Promise.race([
-          runMember(m),
-          new Promise<void>((resolve) =>
+          runOne(spec, position),
+          new Promise<void>((resolve) => {
             setTimeout(() => {
               enqueue({
                 type: "error",
@@ -301,12 +592,12 @@ export async function POST(req: NextRequest) {
                 error: `Timed out after ${PER_MEMBER_TIMEOUT_MS / 1000}s`,
               });
               resolve();
-            }, PER_MEMBER_TIMEOUT_MS)
-          ),
+            }, PER_MEMBER_TIMEOUT_MS);
+          }),
         ]);
       });
 
-      await Promise.all(tasks);
+      await Promise.allSettled(tasks);
       enqueue({ type: "all_done" });
       controller.close();
     },

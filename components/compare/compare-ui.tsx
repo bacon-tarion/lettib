@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Sparkles, Zap, Settings, Users } from "lucide-react";
+import { Sparkles, Zap, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -21,11 +21,9 @@ import {
   getModelDisplayName,
   getProviderLabel,
 } from "@/lib/providers/models";
-import type {
-  CompareProject,
-  CompareTeam,
-  CompareConnection,
-} from "@/app/(app)/compare/page";
+import { calcCompareModelCost } from "@/lib/compare/cost";
+import { cn } from "@/lib/utils";
+import type { CompareProject, CompareConnection } from "@/app/(app)/compare/page";
 
 const TONES = [
   { value: "professional", label: "Professional" },
@@ -36,9 +34,44 @@ const TONES = [
   { value: "persuasive", label: "Persuasive" },
 ];
 
+type ModelPick = {
+  value: string;
+  label: string;
+  provider: string;
+  modelId: string;
+};
+
+function buildModelPicks(connections: CompareConnection[]): ModelPick[] {
+  const catalog = MODELS_CATALOG as Record<
+    string,
+    readonly { id: string; name: string }[]
+  >;
+
+  return connections.flatMap((conn) => {
+    if (conn.provider === "custom") {
+      const modelId = conn.custom_model_name || "custom";
+      return [
+        {
+          value: `custom::${modelId}`,
+          label: `Custom — ${conn.custom_model_name || "Custom Model"}`,
+          provider: "custom",
+          modelId,
+        },
+      ];
+    }
+    const models = catalog[conn.provider] ?? [];
+    return models.map((m) => ({
+      value: `${conn.provider}::${m.id}`,
+      label: `${getProviderLabel(conn.provider)} — ${m.name}`,
+      provider: conn.provider,
+      modelId: m.id,
+    }));
+  });
+}
+
 type ResponseState = {
   key: string;
-  memberId: string;
+  position: number;
   provider: string;
   model: string;
   modelLabel: string;
@@ -55,36 +88,22 @@ type Phase = "idle" | "streaming" | "saving" | "done";
 
 interface CompareUIProps {
   projects: CompareProject[];
-  teams: CompareTeam[];
   connections: CompareConnection[];
+  maxCompareModels: number;
 }
 
-function calcCost(provider: string, model: string, tin: number, tout: number) {
-  const catalog = MODELS_CATALOG as Record<
-    string,
-    readonly { id: string; cost_in: number; cost_out: number }[]
-  >;
-  const entry = catalog[provider]?.find((m) => m.id === model);
-  if (!entry) return 0;
-  return (entry.cost_in * tin) / 1_000_000 + (entry.cost_out * tout) / 1_000_000;
-}
-
-export function CompareUI({ projects, teams, connections }: CompareUIProps) {
+export function CompareUI({
+  projects,
+  connections,
+  maxCompareModels,
+}: CompareUIProps) {
   const router = useRouter();
-  const connectedProviders = useMemo(
-    () => new Set(connections.map((c) => c.provider)),
-    [connections]
-  );
+  const modelPicks = useMemo(() => buildModelPicks(connections), [connections]);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
     projects[0]?.id ?? ""
   );
-  const [selectedTeamId, setSelectedTeamId] = useState<string>(
-    teams[0]?.id ?? ""
-  );
-  const [selectedTone, setSelectedTone] = useState<string>(
-    teams[0]?.default_tone ?? "professional"
-  );
+  const [selectedTone, setSelectedTone] = useState<string>("professional");
   const [prompt, setPrompt] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [responses, setResponses] = useState<ResponseState[]>([]);
@@ -98,8 +117,33 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
     is_free_tier: boolean;
     blocked: boolean;
   } | null>(null);
+  const [selectedValues, setSelectedValues] = useState<Set<string>>(() => {
+    const s = new Set<string>();
+    for (let i = 0; i < Math.min(2, modelPicks.length); i++) {
+      s.add(modelPicks[i]!.value);
+    }
+    if (s.size === 0 && modelPicks[0]) s.add(modelPicks[0].value);
+    return s;
+  });
+  const [retryingKey, setRetryingKey] = useState<string | null>(null);
 
   const responsesRef = useRef<ResponseState[]>([]);
+
+  useEffect(() => {
+    setSelectedValues((prev) => {
+      const next = new Set<string>();
+      for (const v of Array.from(prev)) {
+        if (modelPicks.some((p) => p.value === v)) next.add(v);
+      }
+      if (next.size === 0 && modelPicks[0]) {
+        for (let i = 0; i < Math.min(2, modelPicks.length); i++) {
+          next.add(modelPicks[i]!.value);
+        }
+        if (next.size === 0) next.add(modelPicks[0].value);
+      }
+      return next;
+    });
+  }, [modelPicks]);
 
   useEffect(() => {
     fetch("/api/usage/compare-count")
@@ -108,41 +152,173 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
       .catch(() => {});
   }, [phase]);
 
-  const selectedTeam = teams.find((t) => t.id === selectedTeamId);
+  const selectedModels = useMemo(() => {
+    const list: ModelPick[] = [];
+    for (const p of modelPicks) {
+      if (selectedValues.has(p.value)) list.push(p);
+    }
+    return list;
+  }, [modelPicks, selectedValues]);
 
-  // Estimated cost range (assume ~500 in / ~500 out per model)
   const costEstimate = useMemo(() => {
-    if (!selectedTeam) return { low: 0, high: 0 };
     let total = 0;
-    for (const m of selectedTeam.members) {
-      total += calcCost(m.provider, m.model, 500, 500);
+    for (const m of selectedModels) {
+      total += calcCompareModelCost(m.provider, m.modelId, 500, 500);
     }
     return { low: total * 0.5, high: total * 2 };
-  }, [selectedTeam]);
+  }, [selectedModels]);
 
-  function handleTeamChange(value: string) {
-    setSelectedTeamId(value);
-    const team = teams.find((t) => t.id === value);
-    if (team?.default_tone) setSelectedTone(team.default_tone);
+  const totalActualCost = useMemo(() => {
+    return responses.reduce(
+      (sum, r) =>
+        sum + calcCompareModelCost(r.provider, r.model, r.tokensIn, r.tokensOut),
+      0
+    );
+  }, [responses]);
+
+  function toggleModel(value: string) {
+    setSelectedValues((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) {
+        next.delete(value);
+        return next;
+      }
+      if (next.size >= maxCompareModels) return prev;
+      next.add(value);
+      return next;
+    });
     setResponses([]);
     setConversationId(null);
     setPhase("idle");
   }
 
+  const consumeSseStream = useCallback(
+    async (
+      res: Response,
+      opts: {
+        onMeta?: (conversationId: string) => void;
+        filterKey?: string | null;
+      }
+    ) => {
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const updateResponse = (
+        key: string,
+        patch:
+          | Partial<ResponseState>
+          | ((prev: ResponseState) => Partial<ResponseState>)
+      ) => {
+        if (opts.filterKey && key !== opts.filterKey) return;
+        const next = responsesRef.current.map((r) => {
+          if (r.key !== key) return r;
+          const p = typeof patch === "function" ? patch(r) : patch;
+          return { ...r, ...p };
+        });
+        responsesRef.current = next;
+        setResponses(next);
+      };
+
+      const handleEvent = (raw: string) => {
+        const line = raw.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) return;
+        try {
+          const obj = JSON.parse(line.slice(6));
+          if (obj.type === "meta" && obj.conversation_id && opts.onMeta) {
+            opts.onMeta(obj.conversation_id as string);
+            return;
+          }
+          switch (obj.type) {
+            case "start":
+              updateResponse(obj.key, { status: "streaming" });
+              break;
+            case "chunk":
+              updateResponse(obj.key, (prev) => ({
+                content: prev.content + (obj.text as string),
+                status: "streaming",
+              }));
+              break;
+            case "done":
+              updateResponse(obj.key, {
+                status: "done",
+                tokensIn: obj.tokens_in ?? 0,
+                tokensOut: obj.tokens_out ?? 0,
+                latencyMs: obj.latency_ms,
+              });
+              break;
+            case "error":
+              updateResponse(obj.key, {
+                status: "error",
+                error: obj.error || "Request failed",
+              });
+              break;
+          }
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+        for (const ev of events) handleEvent(ev);
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) handleEvent(buffer);
+
+      const stuck = responsesRef.current.filter(
+        (r) =>
+          (!opts.filterKey || r.key === opts.filterKey) &&
+          (r.status === "pending" || r.status === "streaming")
+      );
+      if (stuck.length > 0) {
+        const next = responsesRef.current.map((r) =>
+          (!opts.filterKey || r.key === opts.filterKey) &&
+          (r.status === "pending" || r.status === "streaming")
+            ? {
+                ...r,
+                status: "error" as const,
+                error: "Stream ended unexpectedly",
+              }
+            : r
+        );
+        responsesRef.current = next;
+        setResponses(next);
+      }
+    },
+    []
+  );
+
   async function runCompare() {
-    if (!prompt.trim() || !selectedTeam || phase === "streaming") return;
+    if (
+      !prompt.trim() ||
+      selectedModels.length === 0 ||
+      phase === "streaming" ||
+      retryingKey
+    ) {
+      return;
+    }
 
     setGlobalError(null);
     setConversationId(null);
     setPhase("streaming");
 
-    // Initialize one response card per team member
-    const initial: ResponseState[] = selectedTeam.members.map((m) => ({
-      key: `${m.provider}::${m.model}::${m.id}`,
-      memberId: m.id,
+    const model_ids = selectedModels.map((m) => ({
       provider: m.provider,
-      model: m.model,
-      modelLabel: getModelDisplayName(m.provider, m.model),
+      model: m.modelId,
+    }));
+
+    const initial: ResponseState[] = selectedModels.map((m, i) => ({
+      key: `${m.provider}::${m.modelId}::${i}`,
+      position: i,
+      provider: m.provider,
+      model: m.modelId,
+      modelLabel: getModelDisplayName(m.provider, m.modelId),
       content: "",
       status: "pending",
       error: null,
@@ -160,7 +336,7 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt,
-          team_id: selectedTeamId,
+          model_ids,
           project_id: selectedProjectId || null,
           tone: selectedTone,
         }),
@@ -171,106 +347,29 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
       return;
     }
 
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
       const errText = await res.text().catch(() => "");
       setGlobalError(errText || `Request failed (${res.status})`);
       setPhase("idle");
       return;
     }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+    let streamedConversationId: string | null = null;
+    await consumeSseStream(res, {
+      onMeta: (id) => {
+        streamedConversationId = id;
+        setConversationId(id);
+      },
+    });
 
-    const updateResponse = (
-      key: string,
-      patch: Partial<ResponseState> | ((prev: ResponseState) => Partial<ResponseState>)
-    ) => {
-      const next = responsesRef.current.map((r) => {
-        if (r.key !== key) return r;
-        const p = typeof patch === "function" ? patch(r) : patch;
-        return { ...r, ...p };
-      });
-      responsesRef.current = next;
-      setResponses(next);
-    };
-
-    const handleEvent = (raw: string) => {
-      const line = raw.split("\n").find((l) => l.startsWith("data: "));
-      if (!line) return;
-      try {
-        const obj = JSON.parse(line.slice(6));
-        switch (obj.type) {
-          case "start":
-            updateResponse(obj.key, { status: "streaming" });
-            break;
-          case "chunk":
-            updateResponse(obj.key, (prev) => ({
-              content: prev.content + (obj.text as string),
-              status: "streaming",
-            }));
-            break;
-          case "done":
-            updateResponse(obj.key, {
-              status: "done",
-              tokensIn: obj.tokens_in ?? 0,
-              tokensOut: obj.tokens_out ?? 0,
-              latencyMs: obj.latency_ms,
-            });
-            break;
-          case "error":
-            updateResponse(obj.key, {
-              status: "error",
-              error: obj.error || "Request failed",
-            });
-            break;
-        }
-      } catch {
-        // ignore parse errors
-      }
-    };
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const events = buffer.split("\n\n");
-      buffer = events.pop() ?? "";
-      for (const ev of events) handleEvent(ev);
-    }
-
-    // Flush any trailing bytes the decoder was holding, then emit the last
-    // event if the stream didn't end with a clean `\n\n`.
-    buffer += decoder.decode();
-    if (buffer.trim()) handleEvent(buffer);
-
-    // Mark anything still pending/streaming as a failure so the UI doesn't
-    // sit forever if the server died mid-flight.
-    const stuck = responsesRef.current.filter(
-      (r) => r.status === "pending" || r.status === "streaming"
-    );
-    if (stuck.length > 0) {
-      const next = responsesRef.current.map((r) =>
-        r.status === "pending" || r.status === "streaming"
-          ? { ...r, status: "error" as const, error: "Stream ended unexpectedly" }
-          : r
-      );
-      responsesRef.current = next;
-      setResponses(next);
-    }
-
-    // All streams complete — save + score
     setPhase("saving");
     try {
       const saveRes = await fetch("/api/compare/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          conversation_id: streamedConversationId ?? undefined,
           prompt,
-          project_id: selectedProjectId || null,
-          team_id: selectedTeamId,
-          tone: selectedTone,
           responses: responsesRef.current.map((r) => ({
             key: r.key,
             provider: r.provider,
@@ -313,13 +412,124 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
       }
     } catch (err) {
       setGlobalError(
-        err instanceof Error
-          ? `Saved partially: ${err.message}`
-          : "Save failed"
+        err instanceof Error ? err.message : "Scoring pass failed"
       );
     }
 
     setPhase("done");
+  }
+
+  async function retryOne(r: ResponseState) {
+    if (
+      !prompt.trim() ||
+      !conversationId ||
+      phase === "streaming" ||
+      retryingKey
+    ) {
+      return;
+    }
+
+    setGlobalError(null);
+    setRetryingKey(r.key);
+    setPhase("streaming");
+
+    updateCard(r.key, {
+      status: "pending",
+      error: null,
+      content: "",
+      tokensIn: 0,
+      tokensOut: 0,
+      latencyMs: undefined,
+      scores: null,
+    });
+
+    let res: Response;
+    try {
+      res = await fetch("/api/compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          model_ids: [{ provider: r.provider, model: r.model }],
+          project_id: selectedProjectId || null,
+          tone: selectedTone,
+          conversation_id: conversationId,
+          retry_position: r.position,
+        }),
+      });
+    } catch (err) {
+      setGlobalError(err instanceof Error ? err.message : "Network error");
+      setRetryingKey(null);
+      setPhase("done");
+      return;
+    }
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      setGlobalError(errText || `Request failed (${res.status})`);
+      setRetryingKey(null);
+      setPhase("done");
+      return;
+    }
+
+    await consumeSseStream(res, { filterKey: r.key });
+
+    try {
+      const saveRes = await fetch("/api/compare/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: conversationId,
+          prompt,
+          responses: responsesRef.current.map((row) => ({
+            key: row.key,
+            provider: row.provider,
+            model: row.model,
+            content: row.content,
+            tokens_in: row.tokensIn,
+            tokens_out: row.tokensOut,
+            latency_ms: row.latencyMs ?? 0,
+            error: row.error,
+          })),
+        }),
+      });
+      const data = await saveRes.json();
+      if (saveRes.ok && Array.isArray(data.scores)) {
+        const scoreByKey = new Map<string, ResponseCardScores>(
+          data.scores.map(
+            (s: ResponseCardScores & { key: string }) => [
+              s.key,
+              {
+                accuracy: s.accuracy,
+                clarity: s.clarity,
+                creativity: s.creativity,
+                usefulness: s.usefulness,
+                risk: s.risk,
+              },
+            ]
+          )
+        );
+        const next = responsesRef.current.map((row) => ({
+          ...row,
+          scores: scoreByKey.get(row.key) ?? row.scores,
+        }));
+        responsesRef.current = next;
+        setResponses(next);
+      }
+    } catch {
+      // scoring best-effort after retry
+    }
+
+    setRetryingKey(null);
+    setPhase("done");
+  }
+
+  function updateCard(key: string, patch: Partial<ResponseState>) {
+    const next = responsesRef.current.map((row) =>
+      row.key === key ? { ...row, ...patch } : row
+    );
+    responsesRef.current = next;
+    setResponses(next);
   }
 
   async function createSynthesis() {
@@ -351,7 +561,6 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
     responses.length > 0 &&
     responses.every((r) => r.status === "done" || r.status === "error");
 
-  // ── Empty states ──────────────────────────────────────────────────────────
   if (connections.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center gap-4">
@@ -372,30 +581,31 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
     );
   }
 
-  if (teams.length === 0) {
+  if (modelPicks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center gap-4">
-        <div className="text-4xl">👥</div>
-        <div>
-          <p className="font-semibold text-lg">No AI Teams yet</p>
-          <p className="text-sm text-muted-foreground mt-1">
-            Create a team of 2+ models in Teams to start comparing.
-          </p>
-        </div>
-        <Button asChild size="sm" className="gap-2">
-          <a href="/teams">
-            <Users className="h-4 w-4" />
-            Go to Teams
-          </a>
+        <p className="text-sm text-muted-foreground">
+          No models available from your connections.
+        </p>
+        <Button asChild size="sm" variant="outline">
+          <a href="/settings">Settings</a>
         </Button>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <div className="space-y-6 max-w-7xl">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold">Compare</h1>
+      </div>
+
+      <div
+        className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100/90"
+        role="status"
+      >
+        Compare Mode sends your prompt to multiple providers simultaneously. API
+        costs apply for each model used.
       </div>
 
       {usage?.is_free_tier && (
@@ -410,13 +620,13 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
         >
           {usage.blocked
             ? "Free tier limit reached. Add your own API keys in Settings to continue running comparisons."
-            : `Free tier: ${usage.used} / ${usage.limit} compares used this month${
+            : `Free tier: ${usage.used} / ${usage.limit} compare events used this month${
                 usage.remaining <= 1 ? " — running low" : ""
               }.`}
         </div>
       )}
 
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 flex-wrap items-center">
         {projects.length > 0 && (
           <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
             <SelectTrigger className="w-40 h-8 text-xs">
@@ -431,18 +641,6 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
             </SelectContent>
           </Select>
         )}
-        <Select value={selectedTeamId} onValueChange={handleTeamChange}>
-          <SelectTrigger className="w-44 h-8 text-xs">
-            <SelectValue placeholder="AI Team" />
-          </SelectTrigger>
-          <SelectContent>
-            {teams.map((t) => (
-              <SelectItem key={t.id} value={t.id} className="text-xs">
-                {t.name} ({t.members.length})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         <Select value={selectedTone} onValueChange={setSelectedTone}>
           <SelectTrigger className="w-36 h-8 text-xs">
             <SelectValue placeholder="Tone" />
@@ -457,41 +655,53 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
         </Select>
       </div>
 
-      {selectedTeam && (
-        <div className="flex flex-wrap gap-1.5 text-xs">
-          {selectedTeam.members.map((m) => {
-            const isConnected = connectedProviders.has(m.provider);
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-muted-foreground">
+          Models (up to {maxCompareModels})
+        </p>
+        <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto border rounded-md p-3">
+          {modelPicks.map((p) => {
+            const checked = selectedValues.has(p.value);
+            const atCap = selectedValues.size >= maxCompareModels && !checked;
             return (
-              <span
-                key={m.id}
-                className={`px-2 py-1 rounded border ${
-                  isConnected
-                    ? "bg-muted/50 border-muted"
-                    : "bg-destructive/10 border-destructive/30 text-destructive"
-                }`}
-                title={isConnected ? "" : "Provider not connected"}
+              <label
+                key={p.value}
+                className={cn(
+                  "flex items-center gap-2 text-xs cursor-pointer rounded-md border px-2 py-1.5",
+                  checked
+                    ? "border-primary bg-primary/5"
+                    : atCap
+                      ? "opacity-50 cursor-not-allowed"
+                      : "border-border hover:bg-muted/50"
+                )}
               >
-                {getProviderLabel(m.provider)} —{" "}
-                {getModelDisplayName(m.provider, m.model)}
-              </span>
+                <input
+                  type="checkbox"
+                  className="rounded border-muted-foreground"
+                  checked={checked}
+                  disabled={atCap}
+                  onChange={() => toggleModel(p.value)}
+                />
+                <span>{p.label}</span>
+              </label>
             );
           })}
         </div>
-      )}
+      </div>
 
       <Textarea
-        placeholder="Enter your prompt and run it across all models in the selected team…"
+        placeholder="Enter your prompt — it will run on every selected model in parallel…"
         className="resize-none min-h-[100px]"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         disabled={phase === "streaming" || phase === "saving"}
       />
 
-      {selectedTeam && (
+      {selectedModels.length > 0 && (
         <div className="flex items-center gap-3 rounded-lg bg-muted/50 border px-4 py-2.5 text-sm text-muted-foreground">
           <span className="text-base">💡</span>
           <span>
-            Estimated cost across {selectedTeam.members.length} models:{" "}
+            Estimated cost across {selectedModels.length} models (rough range):{" "}
             <strong className="text-foreground">
               ${costEstimate.low.toFixed(4)} – ${costEstimate.high.toFixed(4)}
             </strong>
@@ -505,21 +715,24 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
           onClick={runCompare}
           disabled={
             !prompt.trim() ||
+            selectedModels.length === 0 ||
             phase === "streaming" ||
             phase === "saving" ||
-            !selectedTeam
+            !!retryingKey
           }
         >
           <Zap className="h-4 w-4" />
           {phase === "streaming"
-            ? "Streaming…"
+            ? retryingKey
+              ? "Retrying…"
+              : "Streaming…"
             : phase === "saving"
-              ? "Saving + scoring…"
+              ? "Scoring…"
               : "Run Compare"}
         </Button>
         {phase === "saving" && (
           <span className="text-xs text-muted-foreground animate-pulse">
-            Scoring responses…
+            Ranking responses…
           </span>
         )}
       </div>
@@ -533,8 +746,8 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
       {responses.length > 0 && (
         <div className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Scores: <span className="font-medium">A</span>ccuracy ·{" "}
-            <span className="font-medium">C</span>larity ·{" "}
+            Scores (when available): <span className="font-medium">A</span>
+            ccuracy · <span className="font-medium">C</span>larity ·{" "}
             <span className="font-medium">C</span>reativity ·{" "}
             <span className="font-medium">U</span>sefulness ·{" "}
             <span className="font-medium">R</span>isk (higher = more risk)
@@ -544,19 +757,47 @@ export function CompareUI({ projects, teams, connections }: CompareUIProps) {
               <ResponseCard
                 key={r.key}
                 provider={r.provider}
+                providerLabel={getProviderLabel(r.provider)}
                 model={r.model}
                 modelLabel={r.modelLabel}
                 content={r.content}
-                status={r.status}
+                status={
+                  retryingKey === r.key
+                    ? "streaming"
+                    : r.status === "pending" && phase === "streaming"
+                      ? "pending"
+                      : r.status
+                }
                 error={r.error}
                 tokensIn={r.tokensIn}
                 tokensOut={r.tokensOut}
-                cost={calcCost(r.provider, r.model, r.tokensIn, r.tokensOut)}
+                cost={calcCompareModelCost(
+                  r.provider,
+                  r.model,
+                  r.tokensIn,
+                  r.tokensOut
+                )}
                 latencyMs={r.latencyMs}
                 scores={r.scores}
+                onRetry={
+                  r.status === "error" && conversationId && !retryingKey
+                    ? () => void retryOne(r)
+                    : undefined
+                }
               />
             ))}
           </div>
+
+          {responses.some((r) => r.status === "done" || r.status === "error") && (
+            <div className="flex justify-end border-t pt-4">
+              <p className="text-sm text-muted-foreground tabular-nums">
+                Total estimated cost:{" "}
+                <strong className="text-foreground">
+                  ${totalActualCost.toFixed(5)}
+                </strong>
+              </p>
+            </div>
+          )}
 
           {phase === "done" && allComplete && successCount >= 2 && (
             <Button

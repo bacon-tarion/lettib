@@ -20,6 +20,7 @@ export const MODELS_CATALOG = {
     { id: 'grok-4',   name: 'Grok 4',   context: 256000, cost_in: 3.00, cost_out: 15.00, free: false },
   ],
   groq: [
+    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B (Groq)',  context: 131072, cost_in: 0, cost_out: 0, free: true },
     { id: 'llama-3.1-70b-versatile', name: 'Llama 3.1 70B (Groq)',  context: 131072, cost_in: 0, cost_out: 0, free: true },
     { id: 'mixtral-8x7b-32768',      name: 'Mixtral 8x7B (Groq)',   context: 32768,  cost_in: 0, cost_out: 0, free: true },
   ],

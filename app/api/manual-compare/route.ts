@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
-import { createAnthropic } from "@ai-sdk/anthropic";
+import { createGroq } from "@ai-sdk/groq";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
+import { getServerApiKey } from "@/lib/providers";
 import {
   SYNTHESIS_PROMPT,
 } from "@/lib/prompts/synthesis";
@@ -14,13 +15,9 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Anthropic Claude is the manual-compare synthesizer (server-side only — uses
-// ANTHROPIC_API_KEY from env, no per-user keys needed). Model + per-million
-// token pricing kept locally to avoid touching MODELS_CATALOG.
-const SYNTH_PROVIDER = "anthropic";
-const SYNTH_MODEL = "claude-3-5-sonnet-20241022";
-const COST_IN_PER_M = 3.0;
-const COST_OUT_PER_M = 15.0;
+// Manual Compare synthesis uses built-in Groq (GROQ_API_KEY) so users need no keys.
+const SYNTH_PROVIDER = "groq";
+const SYNTH_MODEL = "llama-3.3-70b-versatile";
 
 interface ManualResponseInput {
   source: string;
@@ -76,10 +73,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  const apiKey = getServerApiKey("groq");
+  if (!apiKey?.trim()) {
     return NextResponse.json(
-      { error: "Manual Compare is not configured (ANTHROPIC_API_KEY missing)." },
+      { error: "Manual Compare is not configured (GROQ_API_KEY missing)." },
       { status: 500 }
     );
   }
@@ -168,7 +165,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const startedAt = Date.now();
-    const model = createAnthropic({ apiKey })(SYNTH_MODEL);
+    const model = createGroq({ apiKey })(SYNTH_MODEL);
 
     const result = await generateText({
       model,
@@ -177,9 +174,7 @@ export async function POST(req: NextRequest) {
 
     const tokensIn = result.usage?.promptTokens ?? 0;
     const tokensOut = result.usage?.completionTokens ?? 0;
-    const cost =
-      (COST_IN_PER_M * tokensIn) / 1_000_000 +
-      (COST_OUT_PER_M * tokensOut) / 1_000_000;
+    const cost = 0;
     const latency = Date.now() - startedAt;
 
     const { conflicts, bodyWithoutBlock } = extractConflictsBlock(result.text);
