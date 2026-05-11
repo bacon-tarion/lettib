@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 export type ChatProject = {
   id: string;
   name: string;
+  default_chat_provider?: string | null;
+  default_chat_model?: string | null;
 };
 
 export type ChatConnection = {
@@ -29,7 +32,7 @@ export default async function ChatPage() {
   const [{ data: projects }, { data: connections }] = await Promise.all([
     supabase
       .from("projects")
-      .select("id, name")
+      .select("id, name, default_chat_provider, default_chat_model")
       .eq("user_id", user.id)
       .eq("archived", false)
       .order("pinned", { ascending: false })
@@ -42,9 +45,17 @@ export default async function ChatPage() {
   ]);
 
   return (
-    <ChatUI
-      projects={(projects ?? []) as ChatProject[]}
-      connections={(connections ?? []) as ChatConnection[]}
-    />
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-3xl p-8 text-sm text-muted-foreground">
+          Loading chat…
+        </div>
+      }
+    >
+      <ChatUI
+        projects={(projects ?? []) as ChatProject[]}
+        connections={(connections ?? []) as ChatConnection[]}
+      />
+    </Suspense>
   );
 }

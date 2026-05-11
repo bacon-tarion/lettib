@@ -8,6 +8,7 @@ interface ProjectCardProps {
   name: string;
   description?: string;
   default_ai_team?: string;
+  default_team_display?: string;
   memory_enabled?: boolean;
   chat_count?: number;
   synthesis_count?: number;
@@ -24,6 +25,7 @@ export function ProjectCard({
   name,
   description,
   default_ai_team,
+  default_team_display,
   memory_enabled,
   chat_count = 0,
   synthesis_count = 0,
@@ -40,9 +42,10 @@ export function ProjectCard({
         </CardHeader>
         <CardContent className="pb-2">
           <div className="flex flex-wrap gap-1.5">
-            {default_ai_team && (
+            {(default_team_display ||
+              (default_ai_team && default_ai_team !== "solo")) && (
               <Badge variant="secondary" className="text-xs">
-                {default_ai_team}
+                {default_team_display ?? default_ai_team}
               </Badge>
             )}
             <Badge

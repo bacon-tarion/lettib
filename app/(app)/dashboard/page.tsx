@@ -1,10 +1,11 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { MessageSquare, GitCompare, FolderPlus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ProjectCard } from "@/components/projects/project-card";
-import { mockUser, mockProjects } from "@/lib/mockData";
 import { createClient } from "@/lib/supabase/server";
+import { listTeams } from "@/app/(app)/teams/actions";
 import { listConversationsForUser } from "@/lib/conversations/queries";
 import { getModelDisplayName, getProviderLabel } from "@/lib/providers/models";
 import { getUserUsageSnapshot } from "@/lib/usage/queries";
@@ -31,53 +32,40 @@ const quickActions = [
 ];
 
 export default async function DashboardPage() {
-  let displayName = mockUser.display_name;
-  let pinnedProjects: Array<{
-    id: string;
-    name: string;
-    description?: string | null;
-    pinned: boolean;
-    memory_enabled?: boolean;
-    default_ai_team?: string;
-    chat_count?: number;
-    synthesis_count?: number;
-    updated_at: string;
-  }> = mockProjects.filter((p) => p.pinned);
-  let recentActivity: Awaited<
-    ReturnType<typeof listConversationsForUser>
-  > = [];
-  let snapshot: Awaited<ReturnType<typeof getUserUsageSnapshot>> = null;
-
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
 
-  if (user) {
-    displayName =
-      (user.user_metadata?.display_name as string | undefined) ??
-      user.email?.split("@")[0] ??
-      "there";
+  const displayName =
+    (user.user_metadata?.display_name as string | undefined) ??
+    user.email?.split("@")[0] ??
+    "there";
 
-    const [{ data: pinnedData }, recent, snap] = await Promise.all([
-      supabase
-        .from("projects")
-        .select("*")
-        .eq("user_id", user.id)
-        .eq("pinned", true)
-        .eq("archived", false)
-        .order("updated_at", { ascending: false })
-        .limit(4),
-      listConversationsForUser({ userId: user.id, limit: 8 }),
-      getUserUsageSnapshot(),
-    ]);
+  const [{ data: pinnedData }, recentActivity, snapshot, teams] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("pinned", true)
+      .eq("archived", false)
+      .order("updated_at", { ascending: false })
+      .limit(4),
+    listConversationsForUser({ userId: user.id, limit: 8 }),
+    getUserUsageSnapshot(),
+    listTeams(),
+  ]);
 
-    if (pinnedData && pinnedData.length > 0) {
-      pinnedProjects = pinnedData;
-    }
-    recentActivity = recent;
-    snapshot = snap;
-  }
+  const teamNameById = new Map(teams.map((t) => [t.id, t.name]));
+  const pinnedProjects = (pinnedData ?? []).map((p) => {
+    const row = p as { default_team_id?: string | null };
+    const tid = row.default_team_id;
+    return {
+      ...p,
+      default_team_display: tid ? teamNameById.get(tid) ?? undefined : undefined,
+    };
+  });
 
   return (
     <div className="space-y-8 max-w-6xl">
@@ -114,9 +102,18 @@ export default async function DashboardPage() {
               Pinned Projects
             </h2>
             {pinnedProjects.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-2">
-                No pinned projects yet. Pin a project to see it here.
-              </p>
+              <div className="rounded-lg border border-dashed bg-muted/30 px-4 py-8 text-center">
+                <p className="text-sm text-muted-foreground">
+                  No pinned projects yet.
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Open{" "}
+                  <Link href="/projects" className="underline underline-offset-2">
+                    Projects
+                  </Link>{" "}
+                  and pin one to see it here.
+                </p>
+              </div>
             ) : (
               <div className="flex gap-4 overflow-x-auto pb-2">
                 {pinnedProjects.map((p) => (

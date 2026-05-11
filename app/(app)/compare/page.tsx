@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { isGroqBuiltinEnabled } from "@/lib/builtin-providers";
-import { maxCompareModelsForSubscriptionTier } from "@/lib/pricing";
+import { listTeams } from "@/app/(app)/teams/actions";
 import { CompareUI } from "@/components/compare/compare-ui";
 
 export const dynamic = "force-dynamic";
@@ -25,11 +25,7 @@ export default async function ComparePage() {
 
   const serviceClient = createServiceClient();
 
-  const [
-    { data: projects },
-    { data: connections },
-    { data: profile },
-  ] = await Promise.all([
+  const [{ data: projects }, { data: connections }, teams] = await Promise.all([
     supabase
       .from("projects")
       .select("id, name")
@@ -42,11 +38,7 @@ export default async function ComparePage() {
       .select("provider, status, custom_base_url, custom_model_name")
       .eq("user_id", user.id)
       .in("status", ["connected", "untested"]),
-    serviceClient
-      .from("profiles")
-      .select("subscription_tier")
-      .eq("id", user.id)
-      .maybeSingle(),
+    listTeams(),
   ]);
 
   const connectionList = (connections ?? []) as CompareConnection[];
@@ -64,15 +56,11 @@ export default async function ComparePage() {
         ]
       : connectionList;
 
-  const tier = (profile as { subscription_tier?: string } | null)
-    ?.subscription_tier;
-  const maxCompareModels = maxCompareModelsForSubscriptionTier(tier);
-
   return (
     <CompareUI
       projects={(projects ?? []) as CompareProject[]}
       connections={mergedConnections}
-      maxCompareModels={maxCompareModels}
+      teams={teams}
     />
   );
 }

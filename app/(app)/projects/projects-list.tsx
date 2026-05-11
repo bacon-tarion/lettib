@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { ProjectCard } from "@/components/projects/project-card";
 import { NewProjectDialog } from "@/components/projects/new-project-dialog";
 import { cn } from "@/lib/utils";
+import type { Team } from "@/app/(app)/teams/actions";
+import type { ProjectConnection } from "@/lib/projects/default-chat-model-options";
 
 type Filter = "all" | "pinned" | "archived";
 const FILTERS: Filter[] = ["all", "pinned", "archived"];
@@ -15,6 +17,9 @@ export interface ProjectRow {
   name: string;
   description?: string | null;
   default_ai_team?: string;
+  default_team_id?: string | null;
+  /** Resolved team name for cards (from server). */
+  default_team_display?: string;
   memory_enabled?: boolean;
   pinned?: boolean;
   archived?: boolean;
@@ -23,7 +28,15 @@ export interface ProjectRow {
   synthesis_count?: number;
 }
 
-export function ProjectsList({ projects }: { projects: ProjectRow[] }) {
+export function ProjectsList({
+  projects,
+  teams,
+  connections,
+}: {
+  projects: ProjectRow[];
+  teams: Team[];
+  connections: ProjectConnection[];
+}) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
 
@@ -45,7 +58,7 @@ export function ProjectsList({ projects }: { projects: ProjectRow[] }) {
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">Projects</h1>
-        <NewProjectDialog />
+        <NewProjectDialog teams={teams} connections={connections} />
       </div>
 
       <div className="flex gap-3 flex-wrap items-center">

@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useChat } from "ai/react";
+import type { Message } from "ai";
 import { Send, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,6 +22,30 @@ import {
   getModelById,
 } from "@/lib/providers/models";
 import type { ChatProject, ChatConnection } from "@/app/(app)/chat/page";
+import {
+  compareToChatStorageKey,
+  type CompareToChatHandoff,
+} from "@/lib/compare/to-chat-handoff";
+
+/** Survives React Strict Mode remount so Compare→Chat handoff is not lost after first read. */
+const compareHandoffByNonce = new Map<string, CompareToChatHandoff>();
+const compareHandoffSeedSaved = new Set<string>();
+
+function loadCompareHandoffFromSession(nonce: string): CompareToChatHandoff | null {
+  let cached = compareHandoffByNonce.get(nonce);
+  if (cached) return cached;
+  try {
+    const raw = sessionStorage.getItem(compareToChatStorageKey(nonce));
+    if (!raw) return null;
+    cached = JSON.parse(raw) as CompareToChatHandoff;
+    sessionStorage.removeItem(compareToChatStorageKey(nonce));
+    compareHandoffByNonce.set(nonce, cached);
+    window.setTimeout(() => compareHandoffByNonce.delete(nonce), 120_000);
+    return cached;
+  } catch {
+    return null;
+  }
+}
 
 const PROVIDER_COLORS: Record<string, string> = {
   anthropic: "bg-amber-500",
@@ -93,6 +119,8 @@ interface ChatUIProps {
 }
 
 export function ChatUI({ projects, connections }: ChatUIProps) {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const modelOptions = buildModelOptions(connections);
   const defaultModel = modelOptions[0];
 
@@ -116,6 +144,14 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
+
+  useEffect(() => {
+    const p = projects.find((x) => x.id === selectedProjectId);
+    if (!p?.default_chat_provider || !p?.default_chat_model) return;
+    const v = `${p.default_chat_provider}::${p.default_chat_model}`;
+    if (!modelOptions.some((o) => o.value === v)) return;
+    setSelectedModelValue(v);
+  }, [selectedProjectId, projects, modelOptions]);
 
   const parsedModel = selectedModelValue.split("::");
   const selectedProvider = parsedModel[0] ?? "";
@@ -183,6 +219,93 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
         [selectedProvider, selectedModel, selectedProjectId]
       ),
     });
+
+  useEffect(() => {
+    if (searchParams.get("fromCompare") !== "1") return;
+    const nonce = searchParams.get("h");
+    if (!nonce) {
+      router.replace("/chat");
+      return;
+    }
+
+    const payload = loadCompareHandoffFromSession(nonce);
+    if (!payload) {
+      router.replace("/chat");
+      return;
+    }
+
+    const modelValue = `${payload.provider}::${payload.model}`;
+    const opts = buildModelOptions(connections);
+    if (!opts.some((o) => o.value === modelValue)) {
+      router.replace("/chat");
+      return;
+    }
+
+    setSelectedModelValue(modelValue);
+    if (
+      payload.projectId &&
+      projects.some((p) => p.id === payload.projectId)
+    ) {
+      setSelectedProjectId(payload.projectId);
+    }
+    if (payload.tone && TONES.some((t) => t.value === payload.tone)) {
+      setSelectedTone(payload.tone);
+    }
+
+    const assistantLead =
+      "[Continued from Compare — your original prompt and this model's answer are below.]\n\n";
+    const seedMessages: Message[] = [
+      {
+        id: `compare-${nonce}-user`,
+        role: "user",
+        content: payload.comparePrompt,
+      },
+      {
+        id: `compare-${nonce}-assistant`,
+        role: "assistant",
+        content: assistantLead + payload.compareResponse,
+      },
+    ];
+
+    setMessages((prev) => (prev.length > 0 ? prev : seedMessages));
+
+    if (!compareHandoffSeedSaved.has(nonce)) {
+      compareHandoffSeedSaved.add(nonce);
+      void (async () => {
+        try {
+          const res = await fetch("/api/chat/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              conversation_id: null,
+              project_id: payload.projectId || undefined,
+              messages: seedMessages.map((m) => ({
+                role: m.role,
+                content: m.content,
+              })),
+              provider: payload.provider,
+              model: payload.model,
+              tokens_in: 0,
+              tokens_out: 0,
+              latency_ms: 0,
+            }),
+          });
+          const data = await res.json();
+          if (data.conversation_id) setConversationId(data.conversation_id);
+        } catch {
+          /* non-fatal */
+        }
+      })();
+    }
+
+    router.replace("/chat");
+  }, [
+    searchParams,
+    router,
+    connections,
+    projects,
+    setMessages,
+  ]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });

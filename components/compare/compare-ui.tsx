@@ -22,6 +22,12 @@ import {
   getProviderLabel,
 } from "@/lib/providers/models";
 import { calcCompareModelCost } from "@/lib/compare/cost";
+import { MAX_COMPARE_PARALLEL_MODELS } from "@/lib/compare/constants";
+import type { Team } from "@/app/(app)/teams/actions";
+import {
+  compareToChatStorageKey,
+  type CompareToChatHandoff,
+} from "@/lib/compare/to-chat-handoff";
 import { cn } from "@/lib/utils";
 import type { CompareProject, CompareConnection } from "@/app/(app)/compare/page";
 
@@ -89,14 +95,10 @@ type Phase = "idle" | "streaming" | "saving" | "done";
 interface CompareUIProps {
   projects: CompareProject[];
   connections: CompareConnection[];
-  maxCompareModels: number;
+  teams: Team[];
 }
 
-export function CompareUI({
-  projects,
-  connections,
-  maxCompareModels,
-}: CompareUIProps) {
+export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   const router = useRouter();
   const modelPicks = useMemo(() => buildModelPicks(connections), [connections]);
 
@@ -119,12 +121,14 @@ export function CompareUI({
   } | null>(null);
   const [selectedValues, setSelectedValues] = useState<Set<string>>(() => {
     const s = new Set<string>();
-    for (let i = 0; i < Math.min(2, modelPicks.length); i++) {
+    for (let i = 0; i < Math.min(MAX_COMPARE_PARALLEL_MODELS, modelPicks.length); i++) {
       s.add(modelPicks[i]!.value);
     }
     if (s.size === 0 && modelPicks[0]) s.add(modelPicks[0].value);
     return s;
   });
+  /** When not `manual`, reflects the last AI Team preset applied to checkboxes. */
+  const [teamPresetId, setTeamPresetId] = useState<string>("manual");
   const [retryingKey, setRetryingKey] = useState<string | null>(null);
 
   const responsesRef = useRef<ResponseState[]>([]);
@@ -136,7 +140,7 @@ export function CompareUI({
         if (modelPicks.some((p) => p.value === v)) next.add(v);
       }
       if (next.size === 0 && modelPicks[0]) {
-        for (let i = 0; i < Math.min(2, modelPicks.length); i++) {
+        for (let i = 0; i < Math.min(MAX_COMPARE_PARALLEL_MODELS, modelPicks.length); i++) {
           next.add(modelPicks[i]!.value);
         }
         if (next.size === 0) next.add(modelPicks[0].value);
@@ -176,14 +180,36 @@ export function CompareUI({
     );
   }, [responses]);
 
+  function applyTeamPreset(teamKey: string) {
+    setTeamPresetId(teamKey);
+    setResponses([]);
+    setConversationId(null);
+    setPhase("idle");
+    if (teamKey === "manual") return;
+    const team = teams.find((t) => t.id === teamKey);
+    if (!team) return;
+    const allowed = new Set(modelPicks.map((p) => p.value));
+    const next: string[] = [];
+    const sorted = [...team.members].sort((a, b) => a.position - b.position);
+    for (const m of sorted) {
+      const v = `${m.provider}::${m.model}`;
+      if (allowed.has(v)) {
+        next.push(v);
+        if (next.length >= MAX_COMPARE_PARALLEL_MODELS) break;
+      }
+    }
+    setSelectedValues(new Set(next));
+  }
+
   function toggleModel(value: string) {
+    setTeamPresetId("manual");
     setSelectedValues((prev) => {
       const next = new Set(prev);
       if (next.has(value)) {
         next.delete(value);
         return next;
       }
-      if (next.size >= maxCompareModels) return prev;
+      if (next.size >= MAX_COMPARE_PARALLEL_MODELS) return prev;
       next.add(value);
       return next;
     });
@@ -417,6 +443,34 @@ export function CompareUI({
     }
 
     setPhase("done");
+  }
+
+  function takeModelToChat(r: ResponseState) {
+    if (!prompt.trim() || !r.content.trim()) return;
+    const nonce =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    const payload: CompareToChatHandoff = {
+      provider: r.provider,
+      model: r.model,
+      comparePrompt: prompt,
+      compareResponse: r.content,
+      projectId: selectedProjectId || null,
+      tone: selectedTone,
+    };
+    try {
+      sessionStorage.setItem(
+        compareToChatStorageKey(nonce),
+        JSON.stringify(payload)
+      );
+    } catch {
+      setGlobalError("Could not open Chat (storage blocked).");
+      return;
+    }
+    router.push(
+      `/chat?fromCompare=1&h=${encodeURIComponent(nonce)}`
+    );
   }
 
   async function retryOne(r: ResponseState) {
@@ -653,16 +707,38 @@ export function CompareUI({
             ))}
           </SelectContent>
         </Select>
+        <Select value={teamPresetId} onValueChange={(v) => applyTeamPreset(v)}>
+          <SelectTrigger className="w-52 h-8 text-xs">
+            <SelectValue placeholder="AI Team" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="manual" className="text-xs">
+              Manual model pick
+            </SelectItem>
+            {teams.map((t) => (
+              <SelectItem key={t.id} value={t.id} className="text-xs">
+                {t.name} ({t.members.length} models)
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="space-y-2">
         <p className="text-xs font-medium text-muted-foreground">
-          Models (up to {maxCompareModels})
+          Models (up to {MAX_COMPARE_PARALLEL_MODELS})
         </p>
+        {teams.length > 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            Pick an <strong className="font-medium text-foreground">AI Team</strong>{" "}
+            above to auto-select its models, or toggle models manually.
+          </p>
+        )}
         <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto border rounded-md p-3">
           {modelPicks.map((p) => {
             const checked = selectedValues.has(p.value);
-            const atCap = selectedValues.size >= maxCompareModels && !checked;
+            const atCap =
+              selectedValues.size >= MAX_COMPARE_PARALLEL_MODELS && !checked;
             return (
               <label
                 key={p.value}
@@ -782,6 +858,11 @@ export function CompareUI({
                 onRetry={
                   r.status === "error" && conversationId && !retryingKey
                     ? () => void retryOne(r)
+                    : undefined
+                }
+                onTakeToChat={
+                  r.status === "done" && r.content.trim()
+                    ? () => takeModelToChat(r)
                     : undefined
                 }
               />

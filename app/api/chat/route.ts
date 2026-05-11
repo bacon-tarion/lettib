@@ -65,7 +65,9 @@ export async function POST(req: NextRequest) {
     { p_secret_id: (connection as { vault_secret_id: string }).vault_secret_id }
   );
 
-  if (vaultError || !apiKey) {
+  const trimmedKey =
+    typeof apiKey === "string" ? apiKey.trim() : String(apiKey ?? "").trim();
+  if (vaultError || !trimmedKey) {
     return new Response(
       JSON.stringify({ error: "Failed to retrieve API key" }),
       { status: 500 }
@@ -141,7 +143,7 @@ export async function POST(req: NextRequest) {
     const result = await streamChat({
       provider: provider as "openai" | "anthropic" | "google" | "xai" | "custom",
       model: model as string,
-      apiKey: apiKey as string,
+      apiKey: trimmedKey,
       baseUrl:
         (connection as { custom_base_url: string | null }).custom_base_url ??
         undefined,

@@ -4,12 +4,14 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { streamChat, getServerApiKey } from "@/lib/providers";
 import { MEMORY_INJECTION_PROMPT } from "@/lib/prompts/synthesis";
 import { FREE_COMPARE_LIMIT } from "@/lib/usage/limits";
-import { maxCompareModelsForSubscriptionTier } from "@/lib/pricing";
+import { MAX_COMPARE_PARALLEL_MODELS } from "@/lib/compare/constants";
 import { MODELS_CATALOG } from "@/lib/providers/models";
 import { calcCompareModelCost } from "@/lib/compare/cost";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/** Align with per-member compare timeout (Claude Opus can exceed 90s). */
+export const maxDuration = 300;
 
 const TONE_MAP: Record<string, string> = {
   professional: "Respond in a professional, polished tone.",
@@ -108,20 +110,11 @@ export async function POST(req: NextRequest) {
 
   const serviceClient = createServiceClient();
 
-  const { data: profile } = await serviceClient
-    .from("profiles")
-    .select("subscription_tier")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  const tier = (profile as { subscription_tier?: string } | null)
-    ?.subscription_tier;
-  const maxModels = maxCompareModelsForSubscriptionTier(tier);
-  if (!isRetry && modelIds.length > maxModels) {
+  if (!isRetry && modelIds.length > MAX_COMPARE_PARALLEL_MODELS) {
     return new Response(
       JSON.stringify({
-        error: `Your plan allows up to ${maxModels} models per compare.`,
-        max_models: maxModels,
+        error: `You can compare at most ${MAX_COMPARE_PARALLEL_MODELS} models at once.`,
+        max_models: MAX_COMPARE_PARALLEL_MODELS,
       }),
       { status: 400 }
     );
@@ -384,7 +377,7 @@ export async function POST(req: NextRequest) {
         is_retry: isRetry,
       });
 
-      const PER_MEMBER_TIMEOUT_MS = 90_000;
+      const PER_MEMBER_TIMEOUT_MS = 300_000;
 
       const runOne = async (spec: ModelSpec, position: number) => {
         const key = `${spec.provider}::${spec.model}::${position}`;
@@ -429,10 +422,41 @@ export async function POST(req: NextRequest) {
             }
             return;
           }
-          apiKey = vaultKey as string;
+          // Vault RPC may return whitespace; Anthropic/OpenAI reject untrimmed keys.
+          apiKey =
+            typeof vaultKey === "string"
+              ? vaultKey.trim()
+              : String(vaultKey).trim();
+          if (!apiKey) {
+            const errMsg = "API key from vault is empty after decrypt.";
+            enqueue({ type: "error", key, error: errMsg });
+            const latency_ms = Date.now() - startedAt;
+            if (isRetry) {
+              await serviceClient
+                .from("model_responses")
+                .update({ error: errMsg, latency_ms })
+                .eq("conversation_id", conversationId)
+                .eq("position", position);
+            } else {
+              await serviceClient.from("model_responses").insert({
+                conversation_id: conversationId,
+                provider: spec.provider,
+                model: spec.model,
+                content: "",
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_usd: 0,
+                latency_ms,
+                error: errMsg,
+                position,
+              });
+            }
+            return;
+          }
           baseUrl = conn.custom_base_url ?? null;
         } else {
-          apiKey = getServerApiKey(spec.provider);
+          const raw = getServerApiKey(spec.provider);
+          apiKey = raw ? raw.trim() : null;
           if (!apiKey) {
             const msg = `${spec.provider} is not connected. Add a key in Settings.`;
             enqueue({ type: "error", key, error: msg });

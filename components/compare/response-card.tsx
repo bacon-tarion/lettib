@@ -1,4 +1,4 @@
-import { AlertCircle, Loader2, RotateCcw } from "lucide-react";
+import { AlertCircle, Loader2, MessageSquare, RotateCcw } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -43,6 +43,8 @@ export interface ResponseCardProps {
   latencyMs?: number;
   scores?: ResponseCardScores | null;
   onRetry?: () => void;
+  /** Shown when the model finished with content; opens Chat with this thread as context. */
+  onTakeToChat?: () => void;
 }
 
 function ScoreChip({ label, value }: { label: string; value: number }) {
@@ -79,6 +81,7 @@ export function ResponseCard({
   latencyMs,
   scores,
   onRetry,
+  onTakeToChat,
 }: ResponseCardProps) {
   const style = PROVIDER_STYLES[provider] ?? {
     border: "border-l-gray-400",
@@ -182,6 +185,19 @@ export function ResponseCard({
             <ScoreChip label="Usefulness" value={scores.usefulness} />
             <ScoreChip label="Risk" value={scores.risk} />
           </div>
+        )}
+
+        {status === "done" && content.trim() && onTakeToChat && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="w-full gap-1.5 mt-1"
+            onClick={onTakeToChat}
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            Take to Chat
+          </Button>
         )}
       </CardContent>
 
