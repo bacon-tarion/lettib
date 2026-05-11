@@ -681,8 +681,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          comparison_id: conversationId,
           conversation_id: conversationId,
           tone: selectedTone,
+          project_id: selectedProjectId || null,
         }),
       });
       const data = await res.json();
@@ -690,6 +692,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       router.push(`/synthesis/${data.synthesis_id}`);
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Synthesis failed");
+    } finally {
       setSynthLoading(false);
     }
   }
@@ -968,7 +971,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             </div>
           )}
 
-          {phase === "done" && allComplete && successCount >= 2 && (
+          {phase === "done" && allComplete && !retryingKey && successCount >= 2 && (
             <Button
               className="w-full gap-2"
               variant="default"

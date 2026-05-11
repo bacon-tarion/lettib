@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Brain, GitCompare, MessageSquare } from "lucide-react";
+import { getModelDisplayName, getProviderLabel } from "@/lib/providers/models";
 import { listTeams } from "@/app/(app)/teams/actions";
 import { deleteProject, updateProject } from "@/app/(app)/projects/actions";
 import type { Team } from "@/app/(app)/teams/actions";
@@ -47,6 +48,7 @@ type RecentSynthesis = {
   tone: string;
   cost_usd: number;
   source_response_ids: string[];
+  source_models?: { provider: string; model: string }[];
   score: number | null;
   created_at: string;
 };
@@ -285,7 +287,7 @@ export function ProjectDetailClient({
                         <p className="text-xs text-muted-foreground line-clamp-2">
                           {s.content}
                         </p>
-                        <div className="flex gap-1.5 flex-wrap">
+                        <div className="flex gap-1.5 flex-wrap items-center">
                           <Badge variant="outline" className="text-[10px] capitalize">
                             {s.tone}
                           </Badge>
@@ -294,11 +296,22 @@ export function ProjectDetailClient({
                               {s.model}
                             </Badge>
                           )}
-                          {s.source_response_ids.length > 0 && (
-                            <Badge variant="outline" className="text-[10px]">
-                              {s.source_response_ids.length} sources
+                          {(s.source_models ?? []).map((m, idx) => (
+                            <Badge
+                              key={`${s.id}-src-${idx}`}
+                              variant="outline"
+                              className="text-[10px] max-w-[140px] truncate"
+                              title={`${getProviderLabel(m.provider)} — ${m.model}`}
+                            >
+                              {getModelDisplayName(m.provider, m.model)}
                             </Badge>
-                          )}
+                          ))}
+                          {s.source_response_ids.length > 0 &&
+                            (s.source_models?.length ?? 0) === 0 && (
+                              <Badge variant="outline" className="text-[10px]">
+                                {s.source_response_ids.length} sources
+                              </Badge>
+                            )}
                           {s.score != null && (
                             <Badge variant="secondary" className="text-[10px]">
                               {s.score}/5

@@ -52,5 +52,32 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ syntheses: data ?? [] });
+  const rows = data ?? [];
+  const idSet = new Set<string>();
+  for (const r of rows) {
+    for (const id of (r as { source_response_ids: string[] }).source_response_ids ?? []) {
+      idSet.add(id);
+    }
+  }
+  const allSourceIds = Array.from(idSet);
+  const sourceMeta = new Map<string, { provider: string; model: string }>();
+  if (allSourceIds.length > 0) {
+    const { data: mr } = await service
+      .from("model_responses")
+      .select("id, provider, model")
+      .in("id", allSourceIds);
+    for (const m of (mr ?? []) as { id: string; provider: string; model: string }[]) {
+      sourceMeta.set(m.id, { provider: m.provider, model: m.model });
+    }
+  }
+
+  const syntheses = rows.map((s) => {
+    const ids = (s as { source_response_ids: string[] }).source_response_ids ?? [];
+    const source_models = ids
+      .map((id) => sourceMeta.get(id))
+      .filter(Boolean) as { provider: string; model: string }[];
+    return { ...s, source_models };
+  });
+
+  return NextResponse.json({ syntheses });
 }

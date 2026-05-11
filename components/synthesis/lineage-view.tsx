@@ -16,8 +16,11 @@ interface Props {
 const SLUG_BG: Record<string, string> = {
   claude: "bg-blue-500/15 hover:bg-blue-500/25 border-b border-blue-500/40",
   gpt: "bg-green-500/15 hover:bg-green-500/25 border-b border-green-500/40",
+  chatgpt: "bg-green-500/15 hover:bg-green-500/25 border-b border-green-500/40",
   gemini:
     "bg-orange-500/15 hover:bg-orange-500/25 border-b border-orange-500/40",
+  consensus:
+    "bg-violet-500/15 hover:bg-violet-500/25 border-b border-violet-500/40",
   groq: "bg-purple-500/15 hover:bg-purple-500/25 border-b border-purple-500/40",
   grok: "bg-red-500/15 hover:bg-red-500/25 border-b border-red-500/40",
   synth: "bg-muted/50 hover:bg-muted border-b border-muted-foreground/20",
@@ -26,7 +29,9 @@ const SLUG_BG: Record<string, string> = {
 const SLUG_DOT: Record<string, string> = {
   claude: "bg-blue-500",
   gpt: "bg-green-500",
+  chatgpt: "bg-green-500",
   gemini: "bg-orange-500",
+  consensus: "bg-violet-500",
   groq: "bg-purple-500",
   grok: "bg-red-500",
   synth: "bg-muted-foreground/40",
@@ -35,7 +40,9 @@ const SLUG_DOT: Record<string, string> = {
 const SLUG_LABEL: Record<string, string> = {
   claude: "Claude",
   gpt: "GPT",
+  chatgpt: "ChatGPT",
   gemini: "Gemini",
+  consensus: "Consensus",
   groq: "Groq",
   grok: "Grok",
   synth: "Synthesizer",

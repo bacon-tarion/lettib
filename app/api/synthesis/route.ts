@@ -1,15 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createXai } from "@ai-sdk/xai";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers";
-import { SYNTHESIS_PROMPT } from "@/lib/prompts/synthesis";
+import { LETTIB_SYNTHESIS_ATTRIBUTION_PROMPT } from "@/lib/prompts/synthesis-attribution";
+import { formatCompareResponsesForAttribution } from "@/lib/synthesis/attribution-tags";
 import {
-  buildUniqueSlugs,
   extractConflictsBlock,
   parseLineage,
 } from "@/lib/synthesis/lineage";
@@ -20,6 +18,9 @@ import { upsertMemoryFields } from "@/lib/memory/queries";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const SYNTH_PROVIDER = "anthropic";
+const SYNTH_MODEL = "claude-sonnet-4-6";
+
 function calcCost(provider: string, model: string, tin: number, tout: number) {
   const catalog = MODELS_CATALOG as Record<
     string,
@@ -28,29 +29,6 @@ function calcCost(provider: string, model: string, tin: number, tout: number) {
   const entry = catalog[provider]?.find((m) => m.id === model);
   if (!entry) return 0;
   return (entry.cost_in * tin) / 1_000_000 + (entry.cost_out * tout) / 1_000_000;
-}
-
-async function buildModel(
-  provider: string,
-  model: string,
-  apiKey: string,
-  baseUrl?: string | null
-) {
-  switch (provider) {
-    case "openai":
-      return createOpenAI({ apiKey })(model);
-    case "anthropic":
-      return createAnthropic({ apiKey })(model);
-    case "google":
-      return createGoogleGenerativeAI({ apiKey })(model);
-    case "xai":
-      return createXai({ apiKey })(model);
-    case "custom":
-      if (!baseUrl) throw new Error("baseUrl required for custom provider");
-      return createOpenAI({ apiKey, baseURL: baseUrl })(model);
-    default:
-      throw new Error(`Unknown provider: ${provider}`);
-  }
 }
 
 export async function POST(req: NextRequest) {
@@ -64,25 +42,32 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { conversation_id, tone } = body as {
-    conversation_id: string;
+  const {
+    comparison_id,
+    conversation_id,
+    tone,
+    project_id: bodyProjectId,
+  } = body as {
+    comparison_id?: string;
+    conversation_id?: string;
     tone?: string;
+    project_id?: string | null;
   };
 
-  if (!conversation_id) {
+  const comparisonId = comparison_id ?? conversation_id;
+  if (!comparisonId || typeof comparisonId !== "string") {
     return NextResponse.json(
-      { error: "conversation_id is required" },
+      { error: "comparison_id or conversation_id is required" },
       { status: 400 }
     );
   }
 
   const serviceClient = createServiceClient();
 
-  // Verify conversation ownership and load metadata
   const { data: conv } = await serviceClient
     .from("conversations")
     .select("id, user_id, project_id, title")
-    .eq("id", conversation_id)
+    .eq("id", comparisonId)
     .single();
 
   if (!conv || (conv as { user_id: string }).user_id !== user.id) {
@@ -92,11 +77,25 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Load the user prompt (first user message)
+  let projectId: string | null =
+    (conv as { project_id: string | null }).project_id ?? null;
+  if (bodyProjectId) {
+    const { data: owned } = await serviceClient
+      .from("projects")
+      .select("id")
+      .eq("id", bodyProjectId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!owned) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+    projectId = bodyProjectId;
+  }
+
   const { data: userMsg } = await serviceClient
     .from("messages")
     .select("content")
-    .eq("conversation_id", conversation_id)
+    .eq("conversation_id", comparisonId)
     .eq("role", "user")
     .order("created_at", { ascending: true })
     .limit(1)
@@ -107,11 +106,10 @@ export async function POST(req: NextRequest) {
     (conv as { title: string }).title ??
     "";
 
-  // Load successful model responses
   const { data: responses } = await serviceClient
     .from("model_responses")
     .select("id, provider, model, content, error")
-    .eq("conversation_id", conversation_id)
+    .eq("conversation_id", comparisonId)
     .order("position", { ascending: true });
 
   const successful = ((responses ?? []) as {
@@ -129,80 +127,58 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Use the first response's provider+model as the synthesizer
-  const synth = successful[0];
-
-  const { data: scorerConn } = await serviceClient
+  const { data: anthropicConn } = await serviceClient
     .from("api_connections")
     .select("vault_secret_id, custom_base_url")
     .eq("user_id", user.id)
-    .eq("provider", synth.provider)
+    .eq("provider", "anthropic")
     .in("status", ["connected", "untested"])
-    .single();
+    .maybeSingle();
 
-  if (!scorerConn) {
+  if (!anthropicConn) {
     return NextResponse.json(
-      { error: `Provider ${synth.provider} is no longer connected` },
+      {
+        error:
+          "LettiB Synthesis uses Claude Sonnet on your Anthropic account. Connect Anthropic in Settings.",
+      },
       { status: 400 }
     );
   }
 
-  const { data: apiKey } = await serviceClient.rpc("lettib_read_secret", {
-    p_secret_id: (scorerConn as { vault_secret_id: string }).vault_secret_id,
-  });
-  if (!apiKey) {
+  const { data: apiKey, error: vaultError } = await serviceClient.rpc(
+    "lettib_read_secret",
+    {
+      p_secret_id: (anthropicConn as { vault_secret_id: string }).vault_secret_id,
+    }
+  );
+  if (vaultError || !apiKey) {
     return NextResponse.json(
-      { error: "Could not decrypt API key for synthesis" },
+      { error: "Could not decrypt Anthropic API key for synthesis" },
+      { status: 500 }
+    );
+  }
+  const trimmedKey =
+    typeof apiKey === "string" ? apiKey.trim() : String(apiKey).trim();
+  if (!trimmedKey) {
+    return NextResponse.json(
+      { error: "Anthropic API key is empty after decrypt" },
       { status: 500 }
     );
   }
 
-  // Pull project context if memory enabled
-  let projectContext = "(no project context)";
-  const projectId = (conv as { project_id: string | null }).project_id;
-  if (projectId) {
-    const { data: project } = await supabase
-      .from("projects")
-      .select("name, description")
-      .eq("id", projectId)
-      .single();
-    if (project) {
-      projectContext = [
-        (project as { name: string }).name,
-        (project as { description: string | null }).description,
-      ]
-        .filter(Boolean)
-        .join(" — ");
-    }
-  }
+  const modelResponsesBlock = formatCompareResponsesForAttribution(successful);
+  const toneUsed = (tone ?? "professional").trim() || "professional";
+  const filledPrompt = LETTIB_SYNTHESIS_ATTRIBUTION_PROMPT.replace(
+    "{{user_question}}",
+    prompt
+  )
+    .replace("{{tone}}", toneUsed)
+    .replace("{{model_responses}}", modelResponsesBlock);
 
-  const slugs = buildUniqueSlugs(successful);
-  const sourceSlugList = successful
-    .map((r, i) => `- ${slugs[i]}  (${r.provider} / ${r.model})`)
-    .join("\n");
-
-  const formattedResponses = successful
-    .map(
-      (r, i) =>
-        `### Response ${i + 1} — slug: ${slugs[i]} (${r.provider} / ${r.model})\n${r.content}`
-    )
-    .join("\n\n");
-
-  const filledPrompt = SYNTHESIS_PROMPT.replace("{{question}}", prompt)
-    .replace("{{project_context}}", projectContext)
-    .replace("{{tone}}", tone || "professional")
-    .replace("{{source_slugs}}", sourceSlugList)
-    .replace("{{responses}}", formattedResponses);
+  const synthModel = createAnthropic({ apiKey: trimmedKey })(SYNTH_MODEL);
 
   try {
     const startedAt = Date.now();
-    const synthModel = await buildModel(
-      synth.provider,
-      synth.model,
-      apiKey as string,
-      (scorerConn as { custom_base_url: string | null }).custom_base_url
-    );
-
     const result = await generateText({
       model: synthModel,
       messages: [{ role: "user", content: filledPrompt }],
@@ -210,57 +186,87 @@ export async function POST(req: NextRequest) {
 
     const tokensIn = result.usage?.promptTokens ?? 0;
     const tokensOut = result.usage?.completionTokens ?? 0;
-    const cost = calcCost(synth.provider, synth.model, tokensIn, tokensOut);
+    const cost = calcCost(SYNTH_PROVIDER, SYNTH_MODEL, tokensIn, tokensOut);
     const latency = Date.now() - startedAt;
 
-    // Parse lineage + conflicts out of the model's structured output. The
-    // saved `content` is the prose body (tags + clean text — viewer renders
-    // both forms from `lineage_data`).
     const { conflicts, bodyWithoutBlock } = extractConflictsBlock(result.text);
     const { lineage } = parseLineage(bodyWithoutBlock);
 
-    const { data: synthRow, error: synthError } = await serviceClient
-      .from("syntheses")
-      .insert({
-        user_id: user.id,
-        conversation_id,
-        project_id: projectId,
-        prompt,
-        content: bodyWithoutBlock,
-        provider: synth.provider,
-        model: synth.model,
-        tone: tone || "professional",
-        tokens_in: tokensIn,
-        tokens_out: tokensOut,
-        cost_usd: cost,
-        latency_ms: latency,
-        source_response_ids: successful.map((r) => r.id),
-        lineage_data: lineage,
-        conflict_resolutions: conflicts.map((c) => ({ ...c, chosen: null })),
-      })
-      .select("id")
-      .single();
+    const id = randomUUID();
+    const row = {
+      id,
+      user_id: user.id,
+      comparison_id: comparisonId,
+      project_id: projectId,
+      prompt,
+      content: bodyWithoutBlock,
+      tone: toneUsed,
+      provider: SYNTH_PROVIDER,
+      model: SYNTH_MODEL,
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      cost_usd: cost,
+      latency_ms: latency,
+      source_response_ids: successful.map((r) => r.id),
+      lineage_data: lineage,
+      conflict_resolutions: conflicts.map((c) => ({ ...c, chosen: null })),
+    };
 
-    if (synthError || !synthRow) {
+    const { error: ansErr } = await serviceClient
+      .from("synthesis_answers")
+      .insert(row);
+    if (ansErr) {
+      console.error("synthesis_answers insert:", ansErr);
       return NextResponse.json(
-        { error: synthError?.message ?? "Failed to save synthesis" },
+        {
+          error:
+            ansErr.message ??
+            "Failed to save synthesis (run migration 021_synthesis_answers.sql?)",
+        },
+        { status: 500 }
+      );
+    }
+
+    const { error: synthError } = await serviceClient.from("syntheses").insert({
+      id,
+      user_id: user.id,
+      conversation_id: comparisonId,
+      project_id: projectId,
+      prompt,
+      content: bodyWithoutBlock,
+      provider: SYNTH_PROVIDER,
+      model: SYNTH_MODEL,
+      tone: toneUsed,
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      cost_usd: cost,
+      latency_ms: latency,
+      source_response_ids: successful.map((r) => r.id),
+      lineage_data: lineage,
+      conflict_resolutions: conflicts.map((c) => ({ ...c, chosen: null })),
+      mode: "api",
+    });
+
+    if (synthError) {
+      await serviceClient.from("synthesis_answers").delete().eq("id", id);
+      return NextResponse.json(
+        { error: synthError.message ?? "Failed to save synthesis" },
         { status: 500 }
       );
     }
 
     await serviceClient.from("usage_logs").insert({
       user_id: user.id,
-      conversation_id,
+      conversation_id: comparisonId,
       action: "synthesis",
-      provider: synth.provider,
-      model: synth.model,
+      provider: SYNTH_PROVIDER,
+      model: SYNTH_MODEL,
       tokens_in: tokensIn,
       tokens_out: tokensOut,
       cost_usd: cost,
       latency_ms: latency,
     });
 
-    // ─── Auto-extract project memory (best-effort) ─────────────────────────
     if (projectId) {
       try {
         const { data: proj } = await serviceClient
@@ -296,8 +302,6 @@ export async function POST(req: NextRequest) {
             messages: [{ role: "user", content: extractionPrompt }],
           });
 
-          // Robust JSON extraction: strip fences, then fall back to the
-          // outermost {...} substring if the model wrapped the JSON in prose.
           const rawText = extractionResult.text.trim();
           let raw = rawText;
           const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -344,15 +348,15 @@ export async function POST(req: NextRequest) {
           const extractTokensOut = extractionResult.usage?.completionTokens ?? 0;
           await serviceClient.from("usage_logs").insert({
             user_id: user.id,
-            conversation_id,
+            conversation_id: comparisonId,
             action: "memory_extraction",
-            provider: synth.provider,
-            model: synth.model,
+            provider: SYNTH_PROVIDER,
+            model: SYNTH_MODEL,
             tokens_in: extractTokensIn,
             tokens_out: extractTokensOut,
             cost_usd: calcCost(
-              synth.provider,
-              synth.model,
+              SYNTH_PROVIDER,
+              SYNTH_MODEL,
               extractTokensIn,
               extractTokensOut
             ),
@@ -360,14 +364,13 @@ export async function POST(req: NextRequest) {
           });
         }
       } catch (err) {
-        // Memory extraction is best-effort — never fail the synthesis on this
         console.error("memory extraction failed:", err);
       }
     }
 
     return NextResponse.json({
       success: true,
-      synthesis_id: (synthRow as { id: string }).id,
+      synthesis_id: id,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Synthesis failed";

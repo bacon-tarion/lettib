@@ -10,10 +10,9 @@ import {
 } from "@/lib/providers/models";
 import { cn } from "@/lib/utils";
 import { SynthesisActions } from "./synthesis-actions";
-import { ShareDialog } from "@/components/synthesis/share-dialog";
-import { LineageView } from "@/components/synthesis/lineage-view";
 import { ConflictResolver } from "@/components/synthesis/conflict-resolver";
-import type { LineageSentence, Conflict } from "@/lib/synthesis/lineage";
+import { SynthesisMarkdown } from "@/components/synthesis/synthesis-markdown";
+import type { Conflict } from "@/lib/synthesis/lineage";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +21,7 @@ const PROVIDER_BG: Record<string, string> = {
   anthropic: "bg-amber-500",
   google: "bg-green-500",
   xai: "bg-purple-500",
+  groq: "bg-orange-500",
   custom: "bg-gray-500",
 };
 
@@ -41,7 +41,7 @@ export default async function SynthesisPage({
   const { data: synth } = await serviceClient
     .from("syntheses")
     .select(
-      "id, user_id, conversation_id, project_id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, is_public, share_token, score, user_feedback, lineage_data, conflict_resolutions"
+      "id, user_id, conversation_id, project_id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, score, user_feedback, conflict_resolutions"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -65,30 +65,52 @@ export default async function SynthesisPage({
     latency_ms: number;
     source_response_ids: string[];
     created_at: string;
-    is_public: boolean;
-    share_token: string | null;
     score: number | null;
     user_feedback: string | null;
-    lineage_data: LineageSentence[] | null;
     conflict_resolutions: (Conflict & { chosen: string | null })[] | null;
   };
 
-  const lineage = synthesis.lineage_data ?? [];
   const conflicts = synthesis.conflict_resolutions ?? [];
 
-  // Load the source model_responses to render the "models used" pills
   let sources: { id: string; provider: string; model: string }[] = [];
+  let compareCostUsd = 0;
   if (synthesis.source_response_ids.length > 0) {
     const { data: sourceRows } = await serviceClient
       .from("model_responses")
-      .select("id, provider, model")
+      .select("id, provider, model, cost_usd")
       .in("id", synthesis.source_response_ids);
-    sources = (sourceRows ?? []) as {
+    sources = ((sourceRows ?? []) as {
       id: string;
       provider: string;
       model: string;
-    }[];
+      cost_usd?: number;
+    }[]).map(({ id, provider, model }) => ({ id, provider, model }));
+    compareCostUsd = (sourceRows ?? []).reduce(
+      (sum, r) => sum + Number((r as { cost_usd?: number }).cost_usd ?? 0),
+      0
+    );
+  } else if (synthesis.conversation_id) {
+    const { data: convRows } = await serviceClient
+      .from("model_responses")
+      .select("id, provider, model, cost_usd")
+      .eq("conversation_id", synthesis.conversation_id);
+    sources = ((convRows ?? []) as {
+      id: string;
+      provider: string;
+      model: string;
+    }[]).map((r) => ({
+      id: r.id,
+      provider: r.provider,
+      model: r.model,
+    }));
+    compareCostUsd = (convRows ?? []).reduce(
+      (sum, r) => sum + Number((r as { cost_usd?: number }).cost_usd ?? 0),
+      0
+    );
   }
+
+  const synthesisCost = Number(synthesis.cost_usd ?? 0);
+  const totalCost = compareCostUsd + synthesisCost;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -102,17 +124,15 @@ export default async function SynthesisPage({
       <Card className="bg-muted/40">
         <CardContent className="pt-4 pb-3">
           <p className="text-xs text-muted-foreground mb-1 font-medium uppercase tracking-wider">
-            Original Question
+            Original question
           </p>
-          <p className="text-sm whitespace-pre-wrap">{synthesis.prompt}</p>
+          <p className="text-sm whitespace-pre-wrap leading-relaxed">{synthesis.prompt}</p>
         </CardContent>
       </Card>
 
       {sources.length > 0 && (
-        <div className="flex gap-2 flex-wrap">
-          <span className="text-xs text-muted-foreground self-center">
-            Models used:
-          </span>
+        <div className="flex gap-2 flex-wrap items-center">
+          <span className="text-xs text-muted-foreground shrink-0">Models compared:</span>
           {sources.map((s) => (
             <Badge
               key={s.id}
@@ -135,19 +155,45 @@ export default async function SynthesisPage({
         />
       )}
 
-      <LineageView content={synthesis.content} lineage={lineage} />
+      <div>
+        <p className="text-xs text-muted-foreground mb-2 font-medium uppercase tracking-wider">
+          Merged answer
+        </p>
+        <SynthesisMarkdown content={synthesis.content} />
+      </div>
 
-      <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
+      <Card className="border-dashed bg-muted/20">
+        <CardContent className="pt-4 pb-3 space-y-1.5">
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Cost breakdown
+          </p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm tabular-nums">
+            <span>
+              Compare (models):{" "}
+              <strong className="text-foreground">${compareCostUsd.toFixed(5)}</strong>
+            </span>
+            <span>
+              Synthesis ({synthesis.model ?? "—"}):{" "}
+              <strong className="text-foreground">${synthesisCost.toFixed(5)}</strong>
+            </span>
+            <span className="text-muted-foreground">·</span>
+            <span>
+              Total:{" "}
+              <strong className="text-foreground">${totalCost.toFixed(5)}</strong>
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums flex-wrap">
         <span>
-          Synthesized by{" "}
+          Synthesized with{" "}
           {synthesis.provider
-            ? `${getProviderLabel(synthesis.provider)} ${synthesis.model ?? ""}`
+            ? `${getProviderLabel(synthesis.provider)} · ${synthesis.model ?? ""}`
             : "—"}
         </span>
         <span>·</span>
         <span>{synthesis.tokens_in + synthesis.tokens_out} tokens</span>
-        <span>·</span>
-        <span>${synthesis.cost_usd.toFixed(5)}</span>
         <span>·</span>
         <span>{synthesis.latency_ms}ms</span>
       </div>
@@ -159,13 +205,9 @@ export default async function SynthesisPage({
         content={synthesis.content}
         initialScore={synthesis.score}
         initialFeedback={synthesis.user_feedback}
-        shareSlot={
-          <ShareDialog
-            synthesisId={synthesis.id}
-            initialIsPublic={synthesis.is_public}
-            initialShareToken={synthesis.share_token}
-          />
-        }
+        conversationId={synthesis.conversation_id}
+        initialTone={synthesis.tone}
+        projectId={synthesis.project_id}
       />
     </div>
   );
