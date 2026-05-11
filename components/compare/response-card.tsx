@@ -43,8 +43,8 @@ export interface ResponseCardProps {
   latencyMs?: number;
   scores?: ResponseCardScores | null;
   onRetry?: () => void;
-  /** Shown when the model finished with content; opens Chat with this thread as context. */
-  onTakeToChat?: () => void;
+  /** Opens a new Chat tab with this model and the compare thread (parent gates visibility). */
+  onContinueInChat?: () => void;
 }
 
 function ScoreChip({ label, value }: { label: string; value: number }) {
@@ -81,7 +81,7 @@ export function ResponseCard({
   latencyMs,
   scores,
   onRetry,
-  onTakeToChat,
+  onContinueInChat,
 }: ResponseCardProps) {
   const style = PROVIDER_STYLES[provider] ?? {
     border: "border-l-gray-400",
@@ -187,16 +187,16 @@ export function ResponseCard({
           </div>
         )}
 
-        {status === "done" && content.trim() && onTakeToChat && (
+        {status === "done" && content.trim() && onContinueInChat && (
           <Button
             type="button"
             variant="secondary"
             size="sm"
             className="w-full gap-1.5 mt-1"
-            onClick={onTakeToChat}
+            onClick={onContinueInChat}
           >
             <MessageSquare className="h-3.5 w-3.5" />
-            Take to Chat
+            Continue in Chat
           </Button>
         )}
       </CardContent>

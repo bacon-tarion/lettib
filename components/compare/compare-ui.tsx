@@ -28,6 +28,10 @@ import {
   compareToChatStorageKey,
   type CompareToChatHandoff,
 } from "@/lib/compare/to-chat-handoff";
+import {
+  COMPARE_VIEW_SNAPSHOT_KEY,
+  type CompareViewSnapshotV1,
+} from "@/lib/compare/view-snapshot";
 import { cn } from "@/lib/utils";
 import type { CompareProject, CompareConnection } from "@/app/(app)/compare/page";
 
@@ -132,6 +136,82 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   const [retryingKey, setRetryingKey] = useState<string | null>(null);
 
   const responsesRef = useRef<ResponseState[]>([]);
+  const snapshotHydratedRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || snapshotHydratedRef.current) return;
+    try {
+      const raw = sessionStorage.getItem(COMPARE_VIEW_SNAPSHOT_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw) as CompareViewSnapshotV1;
+      if (s.version !== 1 || !Array.isArray(s.responses)) return;
+      const maxAgeMs = 2 * 60 * 60 * 1000;
+      if (Date.now() - s.savedAt > maxAgeMs) {
+        sessionStorage.removeItem(COMPARE_VIEW_SNAPSHOT_KEY);
+        return;
+      }
+      snapshotHydratedRef.current = true;
+      setPrompt(s.prompt);
+      if (s.selectedProjectId && projects.some((p) => p.id === s.selectedProjectId)) {
+        setSelectedProjectId(s.selectedProjectId);
+      }
+      if (s.selectedTone) setSelectedTone(s.selectedTone);
+      setConversationId(s.conversationId);
+      const restored = s.responses as ResponseState[];
+      responsesRef.current = restored;
+      setResponses(restored);
+      setPhase("done");
+      setTeamPresetId("manual");
+    } catch {
+      try {
+        sessionStorage.removeItem(COMPARE_VIEW_SNAPSHOT_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [projects]);
+
+  useEffect(() => {
+    const allTerminal =
+      responses.length > 0 &&
+      responses.every((r) => r.status === "done" || r.status === "error");
+    if (!allTerminal || phase === "streaming" || retryingKey) return;
+    try {
+      const snap: CompareViewSnapshotV1 = {
+        version: 1,
+        savedAt: Date.now(),
+        prompt,
+        selectedProjectId,
+        selectedTone,
+        conversationId,
+        responses: responses.map((r) => ({
+          key: r.key,
+          position: r.position,
+          provider: r.provider,
+          model: r.model,
+          modelLabel: r.modelLabel,
+          content: r.content,
+          status: r.status,
+          error: r.error,
+          tokensIn: r.tokensIn,
+          tokensOut: r.tokensOut,
+          latencyMs: r.latencyMs,
+          scores: r.scores,
+        })),
+      };
+      sessionStorage.setItem(COMPARE_VIEW_SNAPSHOT_KEY, JSON.stringify(snap));
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }, [
+    responses,
+    phase,
+    retryingKey,
+    prompt,
+    selectedProjectId,
+    selectedTone,
+    conversationId,
+  ]);
 
   useEffect(() => {
     setSelectedValues((prev) => {
@@ -330,6 +410,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       return;
     }
 
+    try {
+      sessionStorage.removeItem(COMPARE_VIEW_SNAPSHOT_KEY);
+    } catch {
+      /* ignore */
+    }
+
     setGlobalError(null);
     setConversationId(null);
     setPhase("streaming");
@@ -445,7 +531,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     setPhase("done");
   }
 
-  function takeModelToChat(r: ResponseState) {
+  function continueModelToChat(r: ResponseState) {
     if (!prompt.trim() || !r.content.trim()) return;
     const nonce =
       typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -458,6 +544,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       compareResponse: r.content,
       projectId: selectedProjectId || null,
       tone: selectedTone,
+      pristineCompareThread: true,
     };
     try {
       sessionStorage.setItem(
@@ -468,9 +555,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       setGlobalError("Could not open Chat (storage blocked).");
       return;
     }
-    router.push(
-      `/chat?fromCompare=1&h=${encodeURIComponent(nonce)}`
-    );
+    const url = `/chat?fromCompare=1&h=${encodeURIComponent(nonce)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   async function retryOne(r: ResponseState) {
@@ -614,6 +700,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   const allComplete =
     responses.length > 0 &&
     responses.every((r) => r.status === "done" || r.status === "error");
+  const canContinueInChat =
+    allComplete && phase !== "streaming" && !retryingKey;
 
   if (connections.length === 0) {
     return (
@@ -860,9 +948,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                     ? () => void retryOne(r)
                     : undefined
                 }
-                onTakeToChat={
-                  r.status === "done" && r.content.trim()
-                    ? () => takeModelToChat(r)
+                onContinueInChat={
+                  canContinueInChat && r.status === "done" && r.content.trim()
+                    ? () => continueModelToChat(r)
                     : undefined
                 }
               />

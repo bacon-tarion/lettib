@@ -8,6 +8,8 @@ export type CompareToChatHandoff = {
   compareResponse: string;
   projectId?: string | null;
   tone?: string;
+  /** When true, Chat seeds user + assistant messages with no extra preamble. */
+  pristineCompareThread?: boolean;
 };
 
 export function compareToChatStorageKey(nonce: string): string {

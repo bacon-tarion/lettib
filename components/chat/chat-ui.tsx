@@ -252,8 +252,11 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
       setSelectedTone(payload.tone);
     }
 
-    const assistantLead =
-      "[Continued from Compare — your original prompt and this model's answer are below.]\n\n";
+    const assistantContent =
+      payload.pristineCompareThread === true
+        ? payload.compareResponse
+        : "[Continued from Compare — your original prompt and this model's answer are below.]\n\n" +
+          payload.compareResponse;
     const seedMessages: Message[] = [
       {
         id: `compare-${nonce}-user`,
@@ -263,7 +266,7 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
       {
         id: `compare-${nonce}-assistant`,
         role: "assistant",
-        content: assistantLead + payload.compareResponse,
+        content: assistantContent,
       },
     ];
 
