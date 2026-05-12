@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { Sidebar } from "@/components/layout/sidebar";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { Header } from "@/components/layout/header";
@@ -13,17 +14,15 @@ export default async function AppLayout({
   let userEmail = mockUser.email;
 
   if (process.env.MOCK_MODE !== "true") {
-    try {
-      const supabase = await createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        userEmail = user.email ?? "";
-      }
-    } catch {
-      // Supabase not configured — keep mock fallback
-    }
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    // Middleware already redirects unauthenticated users away from protected
+    // routes, but defending in depth here avoids leaking the mock identity if
+    // middleware is misconfigured.
+    if (!user) redirect("/login");
+    userEmail = user.email ?? "";
   }
 
   return (

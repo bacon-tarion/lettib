@@ -84,7 +84,7 @@ export async function fetchRecentActivityMerged(
   }[];
 
   const compareIds = compares.map((c) => c.id);
-  let modelLabelsByConv = new Map<string, string>();
+  const modelLabelsByConv = new Map<string, string>();
   if (compareIds.length > 0) {
     const { data: mr } = await sc
       .from("model_responses")

@@ -269,7 +269,7 @@ export default async function ChatViewerPage({
                           styleBg
                         )}
                       >
-                        {r.provider[0].toUpperCase()}
+                        {(r.provider[0] ?? "?").toUpperCase()}
                       </div>
                       <span className="text-xs font-medium truncate flex-1">
                         {getModelDisplayName(r.provider, r.model)}

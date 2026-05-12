@@ -3,7 +3,48 @@ import { CoreMessage } from "ai";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { streamChat } from "@/lib/providers";
+import { MODELS_CATALOG } from "@/lib/providers/models";
 import { MEMORY_INJECTION_PROMPT } from "@/lib/prompts/synthesis";
+
+type ProviderName =
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "xai"
+  | "groq"
+  | "custom";
+
+const VALID_PROVIDERS = new Set<ProviderName>([
+  "openai",
+  "anthropic",
+  "google",
+  "xai",
+  "groq",
+  "custom",
+]);
+
+function catalogHas(provider: string, model: string): boolean {
+  const catalog = MODELS_CATALOG as Record<string, readonly { id: string }[]>;
+  return !!catalog[provider]?.some((m) => m.id === model);
+}
+
+function isValidMessages(v: unknown): v is CoreMessage[] {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (m) =>
+        m &&
+        typeof m === "object" &&
+        typeof (m as { role?: unknown }).role === "string" &&
+        ["user", "assistant", "system"].includes(
+          (m as { role: string }).role
+        ) &&
+        ((m as { content?: unknown }).content === undefined ||
+          typeof (m as { content: unknown }).content === "string" ||
+          Array.isArray((m as { content: unknown }).content))
+    )
+  );
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,18 +71,90 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const body = await req.json();
-  const { messages, provider, model, project_id, conversation_id, tone } =
-    body;
+  let body: {
+    messages?: unknown;
+    provider?: unknown;
+    model?: unknown;
+    project_id?: unknown;
+    conversation_id?: unknown;
+    tone?: unknown;
+  };
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
+      status: 400,
+    });
+  }
 
-  if (!messages || !provider || !model) {
+  const provider =
+    typeof body.provider === "string"
+      ? (body.provider.toLowerCase() as ProviderName)
+      : ("" as ProviderName);
+  const model = typeof body.model === "string" ? body.model : "";
+  const projectId =
+    typeof body.project_id === "string" && body.project_id.length > 0
+      ? body.project_id
+      : null;
+  const conversationId =
+    typeof body.conversation_id === "string" && body.conversation_id.length > 0
+      ? body.conversation_id
+      : null;
+  const tone = typeof body.tone === "string" ? body.tone : null;
+  const messages = body.messages;
+
+  if (!isValidMessages(messages) || !provider || !model) {
     return new Response(
       JSON.stringify({ error: "Missing required fields" }),
       { status: 400 }
     );
   }
+  if (!VALID_PROVIDERS.has(provider)) {
+    return new Response(JSON.stringify({ error: "Invalid provider" }), {
+      status: 400,
+    });
+  }
+  if (provider !== "custom" && !catalogHas(provider, model)) {
+    return new Response(JSON.stringify({ error: "Unknown model" }), {
+      status: 400,
+    });
+  }
 
   const serviceClient = createServiceClient();
+
+  // If conversation_id is supplied, verify it belongs to this user.
+  if (conversationId) {
+    const { data: existing } = await serviceClient
+      .from("conversations")
+      .select("user_id, deleted_at")
+      .eq("id", conversationId)
+      .maybeSingle();
+    const row = existing as
+      | { user_id: string; deleted_at: string | null }
+      | null;
+    if (!row || row.user_id !== user.id || row.deleted_at) {
+      return new Response(
+        JSON.stringify({ error: "Conversation not found" }),
+        { status: 404 }
+      );
+    }
+  }
+
+  // If project_id is supplied, verify ownership before injecting project context.
+  if (projectId) {
+    const { data: ownedProject } = await serviceClient
+      .from("projects")
+      .select("id")
+      .eq("id", projectId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!ownedProject) {
+      return new Response(
+        JSON.stringify({ error: "Project not found or not owned by user" }),
+        { status: 403 }
+      );
+    }
+  }
 
   const { data: connection, error: connError } = await serviceClient
     .from("api_connections")
@@ -74,20 +187,20 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let systemPrompt = tone ? (TONE_MAP[tone as string] ?? "") : "";
+  let systemPrompt = tone ? (TONE_MAP[tone] ?? "") : "";
 
-  if (project_id) {
+  if (projectId) {
     const { data: project } = await supabase
       .from("projects")
       .select("memory_enabled")
-      .eq("id", project_id)
+      .eq("id", projectId)
       .single();
 
     if (project?.memory_enabled) {
       const { data: memory } = await supabase
         .from("project_memory")
         .select("*")
-        .eq("project_id", project_id)
+        .eq("project_id", projectId)
         .single();
 
       if (memory) {
@@ -127,7 +240,7 @@ export async function POST(req: NextRequest) {
     const { data: pf } = await serviceClient
       .from("project_files")
       .select("file_name, extracted_text")
-      .eq("project_id", project_id)
+      .eq("project_id", projectId)
       .eq("user_id", user.id)
       .not("extracted_text", "is", null);
     const fileRows = (pf ?? []) as { file_name: string; extracted_text: string }[];
@@ -141,26 +254,31 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await streamChat({
-      provider: provider as "openai" | "anthropic" | "google" | "xai" | "custom",
-      model: model as string,
+      provider,
+      model,
       apiKey: trimmedKey,
       baseUrl:
         (connection as { custom_base_url: string | null }).custom_base_url ??
         undefined,
-      messages: messages as CoreMessage[],
+      messages,
       systemPrompt: systemPrompt || undefined,
     });
 
     return result.toDataStreamResponse({
       headers: {
-        "X-Conversation-Id": (conversation_id as string) || "",
-        "X-Project-Id": (project_id as string) || "",
-        "X-Provider": provider as string,
-        "X-Model": model as string,
+        "X-Conversation-Id": conversationId || "",
+        "X-Project-Id": projectId || "",
+        "X-Provider": provider,
+        "X-Model": model,
       },
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Stream failed";
-    return new Response(JSON.stringify({ error: message }), { status: 500 });
+    // Don't echo raw provider error messages (may include sensitive payloads
+    // or stack details). Log server-side, return generic message to the client.
+    console.error("[/api/chat] stream failed:", err);
+    return new Response(
+      JSON.stringify({ error: "Failed to start chat stream." }),
+      { status: 500 }
+    );
   }
 }

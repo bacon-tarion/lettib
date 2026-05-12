@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useChat } from "ai/react";
 import type { Message } from "ai";
@@ -133,7 +133,10 @@ type ChatStoredStateV1 = {
 export function ChatUI({ projects, connections }: ChatUIProps) {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const modelOptions = buildModelOptions(connections);
+  // Memoize options so referential identity is stable across renders.
+  // Several effects depend on `modelOptions`; without useMemo a fresh array
+  // each render makes them refire on every state change.
+  const modelOptions = useMemo(() => buildModelOptions(connections), [connections]);
   const defaultModel = modelOptions[0];
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>(

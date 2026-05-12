@@ -248,7 +248,17 @@ export async function POST(req: NextRequest) {
     });
 
     if (synthError) {
-      await serviceClient.from("synthesis_answers").delete().eq("id", id);
+      // Best-effort cleanup of the orphaned synthesis_answers row.
+      const { error: cleanupErr } = await serviceClient
+        .from("synthesis_answers")
+        .delete()
+        .eq("id", id);
+      if (cleanupErr) {
+        console.error(
+          "[synthesis] failed to clean up synthesis_answers after error:",
+          cleanupErr
+        );
+      }
       return NextResponse.json(
         { error: synthError.message ?? "Failed to save synthesis" },
         { status: 500 }

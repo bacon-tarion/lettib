@@ -6,6 +6,8 @@ import { listTeams } from "@/app/(app)/teams/actions";
 import { ProjectsList } from "./projects-list";
 import type { ProjectConnection } from "@/lib/projects/default-chat-model-options";
 
+export const dynamic = "force-dynamic";
+
 export default async function ProjectsPage() {
   if (process.env.MOCK_MODE === "true") {
     return <ProjectsList projects={mockProjects} teams={[]} connections={[]} />;

@@ -81,11 +81,7 @@ export async function addApiKey(
   const validationError = validateKey(provider as ProviderValue, rawKey, options);
   if (validationError) return { success: false, error: validationError };
 
-  console.log("[addApiKey] Starting addApiKey for provider:", provider);
-
   const user = await requireUser();
-  console.log("[addApiKey] Authenticated user.id:", user.id);
-
   const serviceClient = createServiceClient();
   const keyLastFour = rawKey === "no-key" ? null : rawKey.slice(-4);
 
@@ -98,8 +94,6 @@ export async function addApiKey(
       .eq("provider", provider)
       .maybeSingle();
 
-    console.log("[addApiKey] Existing connection:", existing ? existing.id : "none");
-
     // Store the new key via the public wrapper that calls vault.create_secret internally
     const { data: newSecretId, error: vaultError } = await serviceClient.rpc(
       "lettib_store_secret",
@@ -109,13 +103,11 @@ export async function addApiKey(
       }
     );
 
-    console.log("[addApiKey] lettib_store_secret result — id:", newSecretId, "error:", vaultError);
-
     if (vaultError || !newSecretId) {
       console.error("[addApiKey] lettib_store_secret failed:", vaultError);
       return {
         success: false,
-        error: "Failed to store key securely: " + (vaultError?.message ?? "unknown"),
+        error: "Failed to store key securely.",
       };
     }
 
@@ -127,8 +119,7 @@ export async function addApiKey(
         });
       }
 
-      // Update the existing connection row
-      const { data: updateData, error: updateError } = await serviceClient
+      const { error: updateError } = await serviceClient
         .from("api_connections")
         .update({
           vault_secret_id: newSecretId,
@@ -137,13 +128,14 @@ export async function addApiKey(
           custom_base_url: options?.baseUrl ?? null,
           custom_model_name: options?.modelName ?? null,
         })
-        .eq("id", existing.id)
-        .select();
+        .eq("id", existing.id);
 
-      console.log("[addApiKey] UPDATE result:", updateData, "error:", updateError);
+      if (updateError) {
+        console.error("[addApiKey] update failed:", updateError);
+        return { success: false, error: "Failed to update connection." };
+      }
     } else {
-      // Insert a new connection row
-      const { data: insertData, error: insertError } = await serviceClient
+      const { error: insertError } = await serviceClient
         .from("api_connections")
         .insert({
           user_id: user.id,
@@ -153,10 +145,12 @@ export async function addApiKey(
           status: "untested",
           custom_base_url: options?.baseUrl ?? null,
           custom_model_name: options?.modelName ?? null,
-        })
-        .select();
+        });
 
-      console.log("[addApiKey] INSERT result:", insertData, "error:", insertError);
+      if (insertError) {
+        console.error("[addApiKey] insert failed:", insertError);
+        return { success: false, error: "Failed to save connection." };
+      }
     }
 
     revalidatePath("/settings");
@@ -165,7 +159,7 @@ export async function addApiKey(
     console.error("[addApiKey] Unexpected error:", err);
     return {
       success: false,
-      error: err instanceof Error ? err.message : "An unexpected error occurred.",
+      error: "An unexpected error occurred.",
     };
   }
 }
@@ -323,9 +317,10 @@ export async function listApiKeys(): Promise<ApiConnection[]> {
       .eq("user_id", user.id)
       .order("provider");
 
-    console.log("[listApiKeys] user:", user.id, "rows:", data?.length ?? 0, "error:", error);
-
-    if (error) return [];
+    if (error) {
+      console.error("[listApiKeys] query failed:", error);
+      return [];
+    }
     return (data ?? []) as ApiConnection[];
   } catch (err) {
     console.error("[listApiKeys] unexpected error:", err);
