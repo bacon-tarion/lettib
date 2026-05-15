@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { isGroqBuiltinEnabled } from "@/lib/builtin-providers";
-import { listApiKeys } from "./actions";
+import { listApiKeys, getUsageAlertThresholdCents } from "./actions";
 import { SettingsContent } from "./settings-content";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,10 @@ export default async function SettingsPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const connections = await listApiKeys();
+  const [connections, thresholdCents] = await Promise.all([
+    listApiKeys(),
+    getUsageAlertThresholdCents(),
+  ]);
 
   const userEmail = user.email ?? "";
   const userName =
@@ -27,6 +30,7 @@ export default async function SettingsPage() {
       userEmail={userEmail}
       userName={userName}
       groqBuiltinConfigured={isGroqBuiltinEnabled()}
+      initialUsageAlertThresholdCents={thresholdCents}
     />
   );
 }

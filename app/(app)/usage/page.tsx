@@ -1,8 +1,11 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { getUserUsageSummary } from "@/lib/usage/queries";
 import { getModelDisplayName, getProviderLabel } from "@/lib/providers/models";
+import { LiveUsageDashboard } from "@/components/usage/live-usage-dashboard";
+import { UsageWidgetErrorBoundary } from "@/components/usage/usage-error-boundary";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +63,10 @@ export default async function UsagePage() {
         </p>
       </div>
 
+      <UsageWidgetErrorBoundary label="Live spend">
+        <LiveUsageDashboard />
+      </UsageWidgetErrorBoundary>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Card>
           <CardHeader className="pb-1 pt-4">
@@ -86,6 +93,16 @@ export default async function UsagePage() {
           </CardContent>
         </Card>
       </div>
+
+      <p className="text-[11px] text-muted-foreground">
+        Want toasts at a different cadence?{" "}
+        <Link
+          href="/settings"
+          className="underline underline-offset-2 hover:text-foreground"
+        >
+          Change the alert interval in Settings → Alerts.
+        </Link>
+      </p>
 
       {!hasAny && (
         <Card>

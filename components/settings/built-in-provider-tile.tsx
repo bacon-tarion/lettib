@@ -1,6 +1,6 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Sparkles } from "lucide-react";
+import { Sparkles, ExternalLink } from "lucide-react";
 
 interface BuiltInProviderTileProps {
   label: string;
@@ -8,6 +8,8 @@ interface BuiltInProviderTileProps {
   color: string;
   /** Host has configured GROQ_API_KEY */
   configured: boolean;
+  /** Optional provider console URL (e.g. https://console.groq.com/keys). */
+  consoleUrl?: string | null;
 }
 
 export function BuiltInProviderTile({
@@ -15,6 +17,7 @@ export function BuiltInProviderTile({
   initial,
   color,
   configured,
+  consoleUrl,
 }: BuiltInProviderTileProps) {
   return (
     <Card className="border-dashed">
@@ -58,6 +61,18 @@ export function BuiltInProviderTile({
             ? "Llama and Mixtral on Groq are included for this workspace. Add Groq models to AI Teams without storing a key."
             : "This host has not set GROQ_API_KEY. Built-in Groq models are unavailable until it is configured."}
         </p>
+
+        {consoleUrl && (
+          <a
+            href={consoleUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors w-fit"
+          >
+            Get your API key
+            <ExternalLink className="h-3 w-3" aria-hidden />
+          </a>
+        )}
       </CardContent>
     </Card>
   );

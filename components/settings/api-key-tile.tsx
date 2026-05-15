@@ -1,7 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
+import {
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  Trash2,
+  ExternalLink,
+} from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +21,8 @@ interface ApiKeyTileProps {
   color: string;
   initial: string;
   connection: ApiConnection | null;
+  /** Provider console URL (e.g. https://platform.openai.com/api-keys). Null for `custom`. */
+  consoleUrl?: string | null;
   onUpdate: () => void;
 }
 
@@ -64,6 +72,7 @@ export function ApiKeyTile({
   color,
   initial,
   connection,
+  consoleUrl,
   onUpdate,
 }: ApiKeyTileProps) {
   const [testing, setTesting] = useState(false);
@@ -121,6 +130,19 @@ export function ApiKeyTile({
           <p className="text-xs text-muted-foreground truncate">
             Model: {connection.custom_model_name}
           </p>
+        )}
+
+        {/* "Get your API key →" — only when not connected, to avoid clutter. */}
+        {consoleUrl && !isConnected && (
+          <a
+            href={consoleUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors w-fit"
+          >
+            Get your API key
+            <ExternalLink className="h-3 w-3" aria-hidden />
+          </a>
         )}
 
         {/* Test feedback */}

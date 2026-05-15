@@ -298,6 +298,58 @@ export async function deleteApiKey(
   return { success: true };
 }
 
+// ─── Usage alert threshold (Session 10) ──────────────────────────────────────
+//
+// Stored on `profiles.usage_alert_threshold_cents` (see migration 027). We
+// validate as a positive integer between $1 and $10,000 — matching the DB
+// CHECK constraint — and write via the service client to keep policy + grant
+// surface minimal. last_alerted_total_cents is NEVER touched here; it is
+// server-managed via /api/usage/threshold (audit rule: never trust a client-
+// supplied bookmark).
+
+export async function getUsageAlertThresholdCents(): Promise<number> {
+  const user = await requireUser();
+  const service = createServiceClient();
+  const { data } = await service
+    .from("profiles")
+    .select("usage_alert_threshold_cents")
+    .eq("id", user.id)
+    .maybeSingle();
+  const row = data as { usage_alert_threshold_cents: number | null } | null;
+  return row?.usage_alert_threshold_cents ?? 1000;
+}
+
+export async function updateUsageAlertThresholdCents(
+  cents: number
+): Promise<{ success: boolean; error?: string }> {
+  if (!Number.isFinite(cents)) {
+    return { success: false, error: "Threshold must be a number." };
+  }
+  const intCents = Math.floor(cents);
+  if (intCents !== cents || intCents < 100 || intCents > 1_000_000) {
+    return {
+      success: false,
+      error: "Threshold must be a whole-cent value between $1 and $10,000.",
+    };
+  }
+
+  const user = await requireUser();
+  const service = createServiceClient();
+  const { error } = await service
+    .from("profiles")
+    .update({ usage_alert_threshold_cents: intCents })
+    .eq("id", user.id);
+
+  if (error) {
+    console.error("[updateUsageAlertThresholdCents] update failed:", error);
+    return { success: false, error: "Failed to update threshold." };
+  }
+
+  revalidatePath("/settings");
+  revalidatePath("/usage");
+  return { success: true };
+}
+
 export async function listApiKeys(): Promise<ApiConnection[]> {
   try {
     // Get the current user via the user-scoped client (for auth), then query

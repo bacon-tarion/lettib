@@ -21,6 +21,7 @@ import {
   getProviderLabel,
   getModelById,
 } from "@/lib/providers/models";
+import { estimateChatCost, formatCostRange } from "@/lib/cost-estimate";
 import type { ChatProject, ChatConnection } from "@/app/(app)/chat/page";
 import {
   compareToChatStorageKey,
@@ -690,13 +691,17 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
             <Send className="h-4 w-4" />
           </Button>
         </div>
-        <div className="flex items-center justify-between">
-          {isLoading && (
-            <span className="text-xs text-muted-foreground animate-pulse">
-              Streaming…
-            </span>
-          )}
-          <p className="text-xs text-muted-foreground ml-auto">⌘Enter to send</p>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            {isLoading && <span className="animate-pulse">Streaming…</span>}
+            {selectedModel && input.trim().length > 0 && (
+              <span className="tabular-nums">
+                Estimated: ~
+                {formatCostRange(estimateChatCost(input, selectedModel))}
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">⌘Enter to send</p>
         </div>
       </form>
     </div>

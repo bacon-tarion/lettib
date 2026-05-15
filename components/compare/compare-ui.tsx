@@ -22,6 +22,7 @@ import {
   getProviderLabel,
 } from "@/lib/providers/models";
 import { calcCompareModelCost } from "@/lib/compare/cost";
+import { estimateCompareCost, formatCostRange } from "@/lib/cost-estimate";
 import { MAX_COMPARE_PARALLEL_MODELS } from "@/lib/compare/constants";
 import type { Team } from "@/app/(app)/teams/actions";
 import {
@@ -402,13 +403,14 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     return list;
   }, [modelPicks, selectedValues]);
 
-  const costEstimate = useMemo(() => {
-    let total = 0;
-    for (const m of selectedModels) {
-      total += calcCompareModelCost(m.provider, m.modelId, 500, 500);
-    }
-    return { low: total * 0.5, high: total * 2 };
-  }, [selectedModels]);
+  const costEstimate = useMemo(
+    () =>
+      estimateCompareCost(
+        prompt,
+        selectedModels.map((m) => m.modelId)
+      ),
+    [prompt, selectedModels]
+  );
 
   const totalActualCost = useMemo(() => {
     return flatResponses.reduce(
@@ -1242,18 +1244,6 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         disabled={phase === "streaming" || phase === "saving"}
       />
 
-      {selectedModels.length > 0 && (
-        <div className="flex items-center gap-3 rounded-lg bg-muted/50 border px-4 py-2.5 text-sm text-muted-foreground">
-          <span className="text-base">💡</span>
-          <span>
-            Estimated cost across {selectedModels.length} models (rough range):{" "}
-            <strong className="text-foreground">
-              ${costEstimate.low.toFixed(4)} – ${costEstimate.high.toFixed(4)}
-            </strong>
-          </span>
-        </div>
-      )}
-
       <div className="flex items-center gap-3 flex-wrap">
         <Button
           className="gap-2"
@@ -1275,6 +1265,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
               ? "Scoring…"
               : "Run Compare"}
         </Button>
+        {selectedModels.length > 0 && (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            Estimated: ~{formatCostRange(costEstimate)} for this{" "}
+            {selectedModels.length}-model compare
+          </span>
+        )}
         {phase === "saving" && (
           <span className="text-xs text-muted-foreground animate-pulse">
             Ranking responses…
