@@ -32,7 +32,7 @@ pnpm --filter @workspace/lettib run lint       # ESLint
   - **Dashboard:** `app/(app)/dashboard/`
   - **Projects:** `app/(app)/projects/[id]/` (detail page), `actions.ts` (project CRUD)
   - **Chat:** `app/(app)/chat/` (single-model chat), `app/(app)/chat/[id]/` (read-only viewer)
-  - **Compare:** `app/(app)/compare/` (UI), `api/compare/route.ts` (SSE multiplex)
+  - **Compare:** `app/(app)/compare/` (UI), `api/compare/route.ts` (SSE multiplex), `api/compare/save/route.ts` (persistence only — no scoring), `api/compare/score/route.ts` (on-demand grading)
   - **Synthesis:** `app/(app)/synthesis/[id]/` (viewer w/ thumbs rating + feedback), `api/synthesis/route.ts` (generation), `api/syntheses?project_id=` (per-project list, ownership-checked), `api/syntheses/[id]/rate` (POST rating 1-5 + optional feedback), `app/(app)/projects/[id]/syntheses/` (full list page w/ search)
   - **Teams:** `app/(app)/teams/` (CRUD), `actions.ts` (team CRUD)
   - **Settings:** `app/(app)/settings/` (user settings), `actions.ts` (API key management)
@@ -49,6 +49,7 @@ pnpm --filter @workspace/lettib run lint       # ESLint
 
 ## Architecture decisions
 
+- **Compare Workspace v2 (Session 11):** Each model's follow-ups are isolated — peers' answers are NEVER injected into another model's prompt. `model_responses.round_kind` distinguishes `main` rounds (multi-model, fired from the workspace's main follow-up box, filtered to models with "Continue with this model" on) from `branch` rounds (single-model, fired from a card's "Ask this model"). Synthesis is opt-in per response via "Use in Synthesis" and is sent as `source_response_ids` to `/api/synthesis`. Grading is opt-in per response via "Grade answer" or batch via "Grade selected responses", routed through `/api/compare/score`. No more auto-scoring on save.
 - **App Router with route groups:** Uses `(auth)`, `(app)`, `(marketing)` for logical separation and layout management.
 - **Supabase Vault for API keys:** Stores sensitive API keys encrypted using Supabase Vault via a service-role client, with only the last four characters exposed to the browser.
 - **Service-role client for RLS bypass:** `api_connections` and `ai_teams` queries use `serviceClient` with explicit `user_id` filtering to manage RLS.
@@ -80,6 +81,7 @@ pnpm --filter @workspace/lettib run lint       # ESLint
 - `generateStarterTeams` only creates teams where 2+ members have connected providers.
 - Compare via workspace proxy (`localhost:80`) may return 502 on first cold compile due to proxy timeout. Use `localhost:$PORT` directly for testing.
 - Migration 008 must run before Compare works — needs `model_responses`, `syntheses`, and `conversations.mode` column.
+- Migration 028 must run before Compare Workspace v2 works — adds `model_responses.round_kind`. Without it, "Ask this model" inserts will fail with an unknown-column error.
 
 ## Pointers
 

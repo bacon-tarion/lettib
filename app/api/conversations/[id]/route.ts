@@ -69,7 +69,7 @@ export async function GET(
       ? sc
           .from("model_responses")
           .select(
-            "id, provider, model, content, tokens_in, tokens_out, cost_usd, latency_ms, error, score_accuracy, score_clarity, score_creativity, score_usefulness, score_risk, position, round_index, created_at"
+            "id, provider, model, content, tokens_in, tokens_out, cost_usd, latency_ms, error, score_accuracy, score_clarity, score_creativity, score_usefulness, score_risk, position, round_index, round_kind, created_at"
           )
           .eq("conversation_id", conv.id)
           .order("position", { ascending: true })

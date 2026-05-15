@@ -76,6 +76,7 @@ export async function POST(req: NextRequest) {
     conversation_id: bodyConversationId,
     retry_position,
     compare_follow_up: rawFollowUp,
+    ask_model: rawAskModel,
   } = body as {
     prompt?: string;
     project_id?: string | null;
@@ -83,6 +84,8 @@ export async function POST(req: NextRequest) {
     conversation_id?: string | null;
     retry_position?: number | null;
     compare_follow_up?: boolean;
+    /** Session 11: per-model branch — one model, isolated thread context. */
+    ask_model?: boolean;
   };
 
   const modelIds = normalizeModelIds(body.model_ids);
@@ -100,15 +103,36 @@ export async function POST(req: NextRequest) {
     retry_position >= 0 &&
     modelIds.length === 1;
 
+  // "Ask this model" branch — Session 11. Must target a single model and
+  // an existing compare conversation. The runtime path is otherwise
+  // identical to a follow-up (per-model isolated recap via priorByModel)
+  // — only the bookkeeping diverges (round_kind = 'branch').
+  const isAskModel =
+    rawAskModel === true &&
+    typeof bodyConversationId === "string" &&
+    bodyConversationId.length > 0 &&
+    !isRetry &&
+    modelIds.length === 1;
+
   const isFollowUp =
+    !isAskModel &&
     rawFollowUp === true &&
     typeof bodyConversationId === "string" &&
     bodyConversationId.length > 0 &&
     !isRetry;
 
-  if (isRetry && rawFollowUp === true) {
+  if (isRetry && (rawFollowUp === true || rawAskModel === true)) {
     return new Response(
-      JSON.stringify({ error: "Cannot combine retry and compare_follow_up" }),
+      JSON.stringify({ error: "Cannot combine retry with compare_follow_up or ask_model" }),
+      { status: 400 }
+    );
+  }
+  if (rawAskModel === true && !isAskModel) {
+    return new Response(
+      JSON.stringify({
+        error:
+          "ask_model requires conversation_id and exactly one model in model_ids",
+      }),
       { status: 400 }
     );
   }
@@ -299,6 +323,8 @@ export async function POST(req: NextRequest) {
   let positions: number[];
   /** Written on new model_responses rows (0 = first compare round). */
   let insertRoundIndex = 0;
+  /** Session 11: 'main' for initial/follow-up rounds, 'branch' for ask-this-model. */
+  let insertRoundKind: "main" | "branch" = "main";
 
   if (isRetry) {
     const { data: conv, error: convErr } = await serviceClient
@@ -335,7 +361,7 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-  } else if (isFollowUp) {
+  } else if (isFollowUp || isAskModel) {
     const { data: conv, error: convErr } = await serviceClient
       .from("conversations")
       .select("id, user_id, mode, project_id")
@@ -373,6 +399,7 @@ export async function POST(req: NextRequest) {
     const nextRound =
       ((maxRoundRow as { round_index: number } | null)?.round_index ?? -1) + 1;
     insertRoundIndex = nextRound;
+    insertRoundKind = isAskModel ? "branch" : "main";
 
     const { error: msgError } = await serviceClient.from("messages").insert({
       conversation_id: conversationId,
@@ -449,17 +476,33 @@ export async function POST(req: NextRequest) {
         is_follow_up: isFollowUp,
       });
 
+      // Per-model isolated thread history. CRITICAL: a model NEVER sees
+      // another model's response inside a Compare workspace. This holds for
+      // both main follow-ups and "Ask this model" branches; it's how
+      // Compare keeps each model independently attributable so Synthesis
+      // can later combine them honestly.
       const priorByModel = new Map<
         string,
         { round_index: number; content: string }[]
       >();
-      if (isFollowUp && insertRoundIndex > 0) {
-        const { data: allPrior } = await serviceClient
+      if ((isFollowUp || isAskModel) && insertRoundIndex > 0) {
+        // For ask-this-model we only ever care about the single target
+        // model's own rows. The narrow filter is both a perf win and an
+        // additional safety net — even a bug elsewhere can't leak
+        // peer content into the recap.
+        const baseQuery = serviceClient
           .from("model_responses")
           .select("provider, model, round_index, content")
           .eq("conversation_id", conversationId)
           .lt("round_index", insertRoundIndex)
           .order("round_index", { ascending: true });
+
+        const { data: allPrior } = isAskModel
+          ? await baseQuery
+              .eq("provider", modelIds[0]!.provider)
+              .eq("model", modelIds[0]!.model)
+          : await baseQuery;
+
         for (const row of (allPrior ?? []) as {
           provider: string;
           model: string;
@@ -485,7 +528,7 @@ export async function POST(req: NextRequest) {
         const priorKey = `${spec.provider}::${spec.model}`;
         const priorSlices = priorByModel.get(priorKey) ?? [];
         let userContent = prompt;
-        if (isFollowUp && priorSlices.length > 0) {
+        if ((isFollowUp || isAskModel) && priorSlices.length > 0) {
           const recap = priorSlices
             .sort((a, b) => a.round_index - b.round_index)
             .map(
@@ -531,6 +574,7 @@ export async function POST(req: NextRequest) {
                 error: errMsg,
                 position,
                 round_index: insertRoundIndex,
+                round_kind: insertRoundKind,
               });
             }
             return;
@@ -563,6 +607,7 @@ export async function POST(req: NextRequest) {
                 error: errMsg,
                 position,
                 round_index: insertRoundIndex,
+                round_kind: insertRoundKind,
               });
             }
             return;
@@ -594,6 +639,7 @@ export async function POST(req: NextRequest) {
                 error: msg,
                 position,
                 round_index: insertRoundIndex,
+                round_kind: insertRoundKind,
               });
             }
             return;
@@ -670,6 +716,7 @@ export async function POST(req: NextRequest) {
               error: null,
               position,
               round_index: insertRoundIndex,
+              round_kind: insertRoundKind,
             });
           }
 
@@ -715,6 +762,7 @@ export async function POST(req: NextRequest) {
               error: message,
               position,
               round_index: insertRoundIndex,
+              round_kind: insertRoundKind,
             });
           }
         }

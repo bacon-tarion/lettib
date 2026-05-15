@@ -47,12 +47,25 @@ export async function POST(req: NextRequest) {
     conversation_id,
     tone,
     project_id: bodyProjectId,
+    source_response_ids: rawSourceIds,
   } = body as {
     comparison_id?: string;
     conversation_id?: string;
     tone?: string;
     project_id?: string | null;
+    /**
+     * Session 11: when present, ONLY these response IDs (from this
+     * conversation, owned by this user) feed the synthesis prompt.
+     * Deselected responses must NOT influence the synthesis.
+     */
+    source_response_ids?: unknown;
   };
+
+  const requestedSourceIds = Array.isArray(rawSourceIds)
+    ? Array.from(
+        new Set(rawSourceIds.filter((v): v is string => typeof v === "string"))
+      )
+    : null;
 
   const comparisonId = comparison_id ?? conversation_id;
   if (!comparisonId || typeof comparisonId !== "string") {
@@ -106,23 +119,53 @@ export async function POST(req: NextRequest) {
     (conv as { title: string }).title ??
     "";
 
+  // Pull every response in the conversation (ownership already verified
+  // above via `conv.user_id`), then narrow to the caller's selection. We
+  // do the narrowing in JS — not in the SQL `.in(...)` — so that an
+  // attacker passing a foreign UUID can't trick us into pulling a row from
+  // another user's conversation (the row would still be filtered out by
+  // conversation_id, but defence in depth).
   const { data: responses } = await serviceClient
     .from("model_responses")
-    .select("id, provider, model, content, error")
+    .select("id, provider, model, content, error, position, round_index")
     .eq("conversation_id", comparisonId)
     .order("position", { ascending: true });
 
-  const successful = ((responses ?? []) as {
+  const allRows = (responses ?? []) as {
     id: string;
     provider: string;
     model: string;
     content: string;
     error: string | null;
-  }[]).filter((r) => !r.error && r.content?.trim());
+    position: number;
+    round_index: number;
+  }[];
+
+  let pool = allRows;
+  if (requestedSourceIds && requestedSourceIds.length > 0) {
+    const allowed = new Set(allRows.map((r) => r.id));
+    const selected = requestedSourceIds.filter((id) => allowed.has(id));
+    if (selected.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "None of the supplied source_response_ids belong to this conversation",
+        },
+        { status: 400 }
+      );
+    }
+    const selSet = new Set(selected);
+    pool = allRows.filter((r) => selSet.has(r.id));
+  }
+
+  const successful = pool.filter((r) => !r.error && r.content?.trim());
 
   if (successful.length < 2) {
     return NextResponse.json(
-      { error: "Need at least 2 successful responses to synthesize" },
+      {
+        error:
+          "Need at least 2 successful responses to synthesize. Select at least two with “Use in Synthesis”.",
+      },
       { status: 400 }
     );
   }

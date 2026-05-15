@@ -26,6 +26,10 @@ export type CompareResponseSnapshot = {
     usefulness: number;
     risk: number;
   } | null;
+  /** model_responses.id, populated once the row is saved server-side. */
+  responseId?: string | null;
+  /** Session 11: tags rounds spawned by "Ask this model". */
+  roundKind?: "main" | "branch";
 };
 
 /** Legacy v1 flat snapshot (single round). */
@@ -42,6 +46,8 @@ export type CompareViewSnapshotV1 = {
 export type CompareRoundSnapshot = {
   prompt: string;
   responses: CompareResponseSnapshot[];
+  /** Session 11: 'main' (default) or 'branch' for "Ask this model" rounds. */
+  kind?: "main" | "branch";
 };
 
 /** Current persisted Compare UI (multi-round + selection). */
@@ -54,6 +60,16 @@ export type CompareStateSnapshotV2 = {
   selectedModelValues: string[];
   conversationId: string | null;
   rounds: CompareRoundSnapshot[];
+  /**
+   * Session 11: per-model "Continue with this model" toggles, keyed by
+   * `${provider}::${model}`. Models not listed default to ON.
+   */
+  continueByModelKey?: Record<string, boolean>;
+  /**
+   * Session 11: per-response "Use in Synthesis" toggles, keyed by the
+   * response key. Responses not listed default to ON.
+   */
+  useInSynthesisByResponseKey?: Record<string, boolean>;
 };
 
 export function readCompareSnapshotFromStorage(): CompareStateSnapshotV2 | null {

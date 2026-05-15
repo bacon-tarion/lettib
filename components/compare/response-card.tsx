@@ -1,4 +1,15 @@
-import { AlertCircle, Loader2, MessageSquare, RotateCcw } from "lucide-react";
+"use client";
+
+import { useState } from "react";
+import {
+  AlertCircle,
+  Loader2,
+  MessageSquare,
+  RotateCcw,
+  Send,
+  Sparkles,
+  Scale,
+} from "lucide-react";
 import {
   Card,
   CardContent,
@@ -7,6 +18,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 const PROVIDER_STYLES: Record<
@@ -42,9 +54,37 @@ export interface ResponseCardProps {
   cost?: number;
   latencyMs?: number;
   scores?: ResponseCardScores | null;
+  /**
+   * Marks this card as part of an "Ask this model" isolated branch. Lets
+   * the UI label the round and disable the per-model "Continue" toggle
+   * (Continue is a session-wide flag; branches don't affect it).
+   */
+  isBranch?: boolean;
   onRetry?: () => void;
   /** Opens a new Chat tab with this model and the compare thread (parent gates visibility). */
   onContinueInChat?: () => void;
+
+  // ─── Session 11: per-model / per-response controls ─────────────────────
+  /** Shown only on the LATEST card per model (parent decides). */
+  continueWithModel?: {
+    checked: boolean;
+    onChange: (next: boolean) => void;
+  };
+  /** Per-response selection that drives `Use in Synthesis` + `Grade selected`. */
+  useInSynthesis?: {
+    checked: boolean;
+    onChange: (next: boolean) => void;
+  };
+  /** "Ask this model" — inline composer. Latest card per model only. */
+  askThisModel?: {
+    onSubmit: (prompt: string) => void | Promise<void>;
+    isStreaming: boolean;
+  };
+  /** "Grade answer" — runs scoring on this single response. */
+  grade?: {
+    onClick: () => void | Promise<void>;
+    isGrading: boolean;
+  };
 }
 
 function ScoreChip({ label, value }: { label: string; value: number }) {
@@ -80,8 +120,13 @@ export function ResponseCard({
   cost = 0,
   latencyMs,
   scores,
+  isBranch = false,
   onRetry,
   onContinueInChat,
+  continueWithModel,
+  useInSynthesis,
+  askThisModel,
+  grade,
 }: ResponseCardProps) {
   const style = PROVIDER_STYLES[provider] ?? {
     border: "border-l-gray-400",
@@ -97,6 +142,12 @@ export function ResponseCard({
         : status === "error"
           ? "Error"
           : "Waiting";
+
+  const [askDraft, setAskDraft] = useState("");
+  const [askOpen, setAskOpen] = useState(false);
+
+  const isDone = status === "done" && !!content.trim();
+  const isInteractive = isDone;
 
   return (
     <Card className={cn("flex flex-col h-full border-l-4", style.border)}>
@@ -130,18 +181,29 @@ export function ResponseCard({
             <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
           )}
         </div>
-        <Badge
-          variant={
-            status === "error"
-              ? "destructive"
-              : status === "done"
-                ? "default"
-                : "secondary"
-          }
-          className="text-[10px] w-fit font-normal"
-        >
-          {statusLabel}
-        </Badge>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Badge
+            variant={
+              status === "error"
+                ? "destructive"
+                : status === "done"
+                  ? "default"
+                  : "secondary"
+            }
+            className="text-[10px] w-fit font-normal"
+          >
+            {statusLabel}
+          </Badge>
+          {isBranch && (
+            <Badge
+              variant="outline"
+              className="text-[10px] w-fit font-normal border-dashed"
+              title="This response was generated in an isolated 'Ask this model' branch — peers were not consulted."
+            >
+              Solo follow-up
+            </Badge>
+          )}
+        </div>
       </CardHeader>
 
       <CardContent className="flex-1 overflow-y-auto max-h-72 space-y-2">
@@ -187,17 +249,127 @@ export function ResponseCard({
           </div>
         )}
 
-        {status === "done" && content.trim() && onContinueInChat && (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="w-full gap-1.5 mt-1"
-            onClick={onContinueInChat}
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            Continue in Chat
-          </Button>
+        {/* ── Session 11 controls — only meaningful once the response is done. */}
+        {isInteractive && (useInSynthesis || continueWithModel) && (
+          <div className="pt-2 border-t flex flex-col gap-1.5">
+            {useInSynthesis && (
+              <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="rounded border-muted-foreground"
+                  checked={useInSynthesis.checked}
+                  onChange={(e) => useInSynthesis.onChange(e.target.checked)}
+                />
+                <span className="text-foreground">Use in Synthesis</span>
+              </label>
+            )}
+            {continueWithModel && (
+              <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="rounded border-muted-foreground"
+                  checked={continueWithModel.checked}
+                  onChange={(e) => continueWithModel.onChange(e.target.checked)}
+                />
+                <span className="text-foreground">Continue with this model</span>
+              </label>
+            )}
+          </div>
+        )}
+
+        {/* Action row */}
+        {isInteractive && (grade || askThisModel || onContinueInChat) && (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {grade && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5 h-7 px-2 text-xs"
+                onClick={() => void grade.onClick()}
+                disabled={grade.isGrading}
+              >
+                {grade.isGrading ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Scale className="h-3 w-3" />
+                )}
+                Grade answer
+              </Button>
+            )}
+            {askThisModel && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5 h-7 px-2 text-xs"
+                onClick={() => setAskOpen((v) => !v)}
+                disabled={askThisModel.isStreaming}
+              >
+                <Sparkles className="h-3 w-3" />
+                {askOpen ? "Close" : "Ask this model"}
+              </Button>
+            )}
+            {onContinueInChat && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 h-7 px-2 text-xs"
+                onClick={onContinueInChat}
+              >
+                <MessageSquare className="h-3 w-3" />
+                Continue in Chat
+              </Button>
+            )}
+          </div>
+        )}
+
+        {askThisModel && askOpen && (
+          <div className="space-y-2 pt-2">
+            <Textarea
+              placeholder="Ask only this model a follow-up — its peers won't see it."
+              className="resize-none min-h-[60px] text-xs"
+              value={askDraft}
+              onChange={(e) => setAskDraft(e.target.value)}
+              disabled={askThisModel.isStreaming}
+            />
+            <div className="flex justify-end gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  setAskDraft("");
+                  setAskOpen(false);
+                }}
+                disabled={askThisModel.isStreaming}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 px-2 text-xs gap-1"
+                disabled={!askDraft.trim() || askThisModel.isStreaming}
+                onClick={async () => {
+                  const text = askDraft.trim();
+                  if (!text) return;
+                  setAskDraft("");
+                  setAskOpen(false);
+                  await askThisModel.onSubmit(text);
+                }}
+              >
+                {askThisModel.isStreaming ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Send className="h-3 w-3" />
+                )}
+                Send
+              </Button>
+            </div>
+          </div>
         )}
       </CardContent>
 

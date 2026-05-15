@@ -1,19 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateText } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createXai } from "@ai-sdk/xai";
-import { createGroq } from "@ai-sdk/groq";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import { getServerApiKey } from "@/lib/providers";
-import { buildScoringMessage } from "@/lib/prompts/scoring";
 import { calcCompareModelCost } from "@/lib/compare/cost";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Persist a Compare round.
+ *
+ * Session 11 (Compare Workspace v2): this route NO LONGER runs the
+ * scoring pass. Grading is now strictly opt-in via /api/compare/score so
+ * Compare doesn't charge users for an evaluation pass on every round.
+ *
+ * Two paths:
+ *   1. `existingConversationId` is set — POST /api/compare already
+ *      streamed and inserted `model_responses` rows. This branch is now
+ *      almost a no-op: it just verifies ownership and returns the
+ *      row IDs the client needs for "Use in Synthesis" selection.
+ *   2. Legacy / manual-compare callers send raw rows here for insert.
+ *      We still support this path so /manual-compare keeps working.
+ */
 type ResponsePayload = {
   key: string;
   provider: string;
@@ -26,145 +33,6 @@ type ResponsePayload = {
   /** Matches model_responses.position (required when positions are not 0..n-1). */
   position?: number;
 };
-
-type ScoreRow = {
-  key: string;
-  accuracy: number;
-  clarity: number;
-  creativity: number;
-  usefulness: number;
-  risk: number;
-};
-
-async function buildLanguageModel(
-  provider: string,
-  model: string,
-  apiKey: string,
-  baseUrl?: string | null
-) {
-  switch (provider) {
-    case "openai":
-      return createOpenAI({ apiKey })(model);
-    case "anthropic":
-      return createAnthropic({ apiKey })(model);
-    case "google":
-      return createGoogleGenerativeAI({ apiKey })(model);
-    case "xai":
-      return createXai({ apiKey })(model);
-    case "groq":
-      return createGroq({ apiKey })(model);
-    case "custom":
-      if (!baseUrl) throw new Error("baseUrl required for custom provider");
-      return createOpenAI({ apiKey, baseURL: baseUrl })(model);
-    default:
-      throw new Error(`Unknown provider: ${provider}`);
-  }
-}
-
-async function runScoringPass(
-  serviceClient: ReturnType<typeof createServiceClient>,
-  userId: string,
-  prompt: string,
-  responses: ResponsePayload[],
-  idByKey: Map<string, string>
-): Promise<{ scores: ScoreRow[]; scoringError: string | null }> {
-  let scores: ScoreRow[] = [];
-  let scoringError: string | null = null;
-
-  const successful = responses.filter((r) => !r.error && r.content?.trim());
-  if (successful.length < 2) {
-    return { scores, scoringError };
-  }
-
-  try {
-    let scorerResp: ResponsePayload | null = null;
-    let apiKey: string | null = null;
-    let baseUrl: string | null = null;
-
-    for (const r of successful) {
-      const { data: scorerConn } = await serviceClient
-        .from("api_connections")
-        .select("vault_secret_id, custom_base_url")
-        .eq("user_id", userId)
-        .eq("provider", r.provider)
-        .in("status", ["connected", "untested"])
-        .maybeSingle();
-
-      if (scorerConn) {
-        const { data: vaultKey } = await serviceClient.rpc("lettib_read_secret", {
-          p_secret_id: (scorerConn as { vault_secret_id: string }).vault_secret_id,
-        });
-        if (vaultKey) {
-          scorerResp = r;
-          apiKey = vaultKey as string;
-          baseUrl = (scorerConn as { custom_base_url: string | null })
-            .custom_base_url;
-          break;
-        }
-      }
-
-      const serverKey = getServerApiKey(r.provider);
-      if (serverKey) {
-        scorerResp = r;
-        apiKey = serverKey;
-        baseUrl = null;
-        break;
-      }
-    }
-
-    if (!scorerResp || !apiKey) {
-      return { scores, scoringError: null };
-    }
-
-    const scoringMessage = buildScoringMessage(
-      prompt,
-      successful.map((r) => ({
-        key: r.key,
-        provider: r.provider,
-        model: r.model,
-        content: r.content,
-      }))
-    );
-
-    const scorerModel = await buildLanguageModel(
-      scorerResp.provider,
-      scorerResp.model,
-      apiKey,
-      baseUrl
-    );
-
-    const result = await generateText({
-      model: scorerModel,
-      messages: [{ role: "user", content: scoringMessage }],
-    });
-
-    let jsonText = result.text.trim();
-    const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) jsonText = fenceMatch[1].trim();
-
-    const parsed = JSON.parse(jsonText) as { scores: ScoreRow[] };
-    if (Array.isArray(parsed.scores)) scores = parsed.scores;
-
-    for (const s of scores) {
-      const id = idByKey.get(s.key);
-      if (!id) continue;
-      await serviceClient
-        .from("model_responses")
-        .update({
-          score_accuracy: s.accuracy,
-          score_clarity: s.clarity,
-          score_creativity: s.creativity,
-          score_usefulness: s.usefulness,
-          score_risk: s.risk,
-        })
-        .eq("id", id);
-    }
-  } catch (err) {
-    scoringError = err instanceof Error ? err.message : "Scoring failed";
-  }
-
-  return { scores, scoringError };
-}
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -198,7 +66,7 @@ export async function POST(req: NextRequest) {
 
   const serviceClient = createServiceClient();
 
-  // ── Scoring-only: conversation already persisted by POST /api/compare ─────
+  // ── Already-persisted path: just verify ownership + return ids ───────────
   if (existingConversationId) {
     const { data: conv, error: convErr } = await serviceClient
       .from("conversations")
@@ -229,38 +97,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const idByKey = new Map<string, string>();
     const rows = existingRows as { id: string; position: number }[];
+    const responseIds: { key: string; id: string }[] = [];
     for (const resp of responses) {
       const pos =
         typeof resp.position === "number"
           ? resp.position
           : parseInt(resp.key.split("::").pop() ?? "-1", 10);
       const row = rows.find((r) => r.position === pos);
-      if (row) idByKey.set(resp.key, row.id);
+      if (row) responseIds.push({ key: resp.key, id: row.id });
     }
-
-    const { scores, scoringError } = await runScoringPass(
-      serviceClient,
-      user.id,
-      prompt,
-      responses,
-      idByKey
-    );
 
     return NextResponse.json({
       success: true,
       conversation_id: existingConversationId,
-      response_ids: Array.from(idByKey.entries()).map(([key, id]) => ({
-        key,
-        id,
-      })),
-      scores,
-      scoring_error: scoringError,
+      response_ids: responseIds,
     });
   }
 
-  // ── Legacy: create conversation + rows (manual-compare / older clients) ────
+  // ── Legacy / manual-compare path: create conversation + rows ─────────────
   let resolvedProjectId: string | null = null;
   if (project_id) {
     const { data: ownedProject } = await serviceClient
@@ -339,6 +194,7 @@ export async function POST(req: NextRequest) {
     error: r.error ?? null,
     position: typeof r.position === "number" ? r.position : i,
     round_index: 0,
+    round_kind: "main" as const,
   }));
 
   const { data: insertedResponses, error: insertError } = await serviceClient
@@ -377,7 +233,7 @@ export async function POST(req: NextRequest) {
     await serviceClient.from("usage_logs").insert(usageLogs);
   }
 
-  const idByKey = new Map<string, string>();
+  const responseIds: { key: string; id: string }[] = [];
   const insertedByPosition = new Map<number, string>();
   for (const row of insertedResponses as { id: string; position: number }[]) {
     insertedByPosition.set(row.position, row.id);
@@ -389,25 +245,12 @@ export async function POST(req: NextRequest) {
         ? resp.position
         : parseInt(resp.key.split("::").pop() ?? String(i), 10);
     const id = insertedByPosition.get(pos);
-    if (id) idByKey.set(resp.key, id);
+    if (id) responseIds.push({ key: resp.key, id });
   }
-
-  const { scores, scoringError } = await runScoringPass(
-    serviceClient,
-    user.id,
-    prompt,
-    responses,
-    idByKey
-  );
 
   return NextResponse.json({
     success: true,
     conversation_id: conversationId,
-    response_ids: Array.from(idByKey.entries()).map(([key, id]) => ({
-      key,
-      id,
-    })),
-    scores,
-    scoring_error: scoringError,
+    response_ids: responseIds,
   });
 }

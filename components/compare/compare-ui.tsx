@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Sparkles, Zap, Settings } from "lucide-react";
+import { Loader2, Scale, Sparkles, Zap, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -96,11 +96,23 @@ type ResponseState = {
   tokensOut: number;
   latencyMs?: number;
   scores: ResponseCardScores | null;
+  /** model_responses.id — populated after /api/compare/save persists the row. */
+  responseId: string | null;
 };
 
 type Phase = "idle" | "streaming" | "saving" | "done";
 
-type CompareRound = { prompt: string; responses: ResponseState[] };
+type CompareRound = {
+  prompt: string;
+  responses: ResponseState[];
+  /** Session 11: 'branch' rounds are "Ask this model" follow-ups. */
+  kind: "main" | "branch";
+};
+
+/** Stable per-model identifier used by the "Continue with this model" toggle. */
+function modelKeyOf(provider: string, model: string): string {
+  return `${provider}::${model}`;
+}
 
 interface CompareUIProps {
   projects: CompareProject[];
@@ -124,6 +136,7 @@ function snapshotRowToState(
     tokensOut: r.tokensOut,
     latencyMs: r.latencyMs,
     scores: r.scores,
+    responseId: r.responseId ?? null,
   };
 }
 
@@ -164,6 +177,28 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   const [teamPresetId, setTeamPresetId] = useState<string>("manual");
   const [retryingKey, setRetryingKey] = useState<string | null>(null);
 
+  // ─── Session 11: per-model & per-response selection state ──────────────
+  //
+  // continueByModelKey: keyed by `${provider}::${model}`. Drives which
+  // models receive the main follow-up prompt. Defaults to true when a
+  // model first produces a response.
+  const [continueByModelKey, setContinueByModelKey] = useState<
+    Record<string, boolean>
+  >({});
+  // useInSynthesisByKey: keyed by response key. Drives Synthesis inclusion
+  // + "Grade selected responses". Defaults to true for each new response.
+  const [useInSynthesisByKey, setUseInSynthesisByKey] = useState<
+    Record<string, boolean>
+  >({});
+  // gradingKeys: response keys currently waiting on /api/compare/score.
+  // Stored as a record so we can re-render individual cards.
+  const [gradingKeys, setGradingKeys] = useState<Record<string, boolean>>({});
+  // askingModelKey: the modelKey (provider::model) currently streaming an
+  // "Ask this model" follow-up. Disables other Ask buttons during that
+  // round so we don't race two branches against each other.
+  const [askingModelKey, setAskingModelKey] = useState<string | null>(null);
+  const [batchGrading, setBatchGrading] = useState(false);
+
   const roundsRef = useRef<CompareRound[]>([]);
   const snapshotHydratedRef = useRef(false);
   const urlHydratedRef = useRef(false);
@@ -201,9 +236,16 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       snap.rounds.map((round) => ({
         prompt: round.prompt,
         responses: round.responses.map(snapshotRowToState),
+        kind: round.kind ?? "main",
       }))
     );
     setPrompt(snap.rounds[0]?.prompt ?? "");
+    if (snap.continueByModelKey) {
+      setContinueByModelKey({ ...snap.continueByModelKey });
+    }
+    if (snap.useInSynthesisByResponseKey) {
+      setUseInSynthesisByKey({ ...snap.useInSynthesisByResponseKey });
+    }
     setPhase("done");
     setShowRestoreBanner(true);
   }, [projects, modelPicks, compareIdFromUrl]);
@@ -230,6 +272,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             created_at: string;
           }[];
           model_responses: {
+            id: string;
             provider: string;
             model: string;
             content: string;
@@ -239,6 +282,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             error: string | null;
             position: number;
             round_index?: number;
+            round_kind?: "main" | "branch";
             score_accuracy: number | null;
             score_clarity: number | null;
             score_creativity: number | null;
@@ -264,10 +308,20 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
           );
 
         const byRoundIdx = new Map<number, ResponseState[]>();
+        const roundKindByIdx = new Map<number, "main" | "branch">();
+        const seenContinue: Record<string, boolean> = {};
+        const seenSynthesis: Record<string, boolean> = {};
         for (const mr of data.model_responses ?? []) {
           const ri =
             typeof mr.round_index === "number" ? mr.round_index : 0;
           if (!byRoundIdx.has(ri)) byRoundIdx.set(ri, []);
+          // Once a round is marked branch, keep it branch — branch rounds
+          // contain a single row, so this is a no-op but defends against
+          // a hypothetical mixed-round.
+          const kind = mr.round_kind === "branch" ? "branch" : "main";
+          if (!roundKindByIdx.has(ri) || kind === "branch") {
+            roundKindByIdx.set(ri, kind);
+          }
           const scores =
             mr.score_accuracy != null
               ? {
@@ -278,8 +332,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                   risk: mr.score_risk ?? 0,
                 }
               : null;
+          const key = `${mr.provider}::${mr.model}::${mr.position}`;
           byRoundIdx.get(ri)!.push({
-            key: `${mr.provider}::${mr.model}::${mr.position}`,
+            key,
             position: mr.position,
             provider: mr.provider,
             model: mr.model,
@@ -291,7 +346,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             tokensOut: mr.tokens_out ?? 0,
             latencyMs: mr.latency_ms,
             scores,
+            responseId: mr.id,
           });
+          seenContinue[modelKeyOf(mr.provider, mr.model)] = true;
+          if (!mr.error && mr.content?.trim()) seenSynthesis[key] = true;
         }
         for (const [, arr] of Array.from(byRoundIdx.entries())) {
           arr.sort((a: ResponseState, b: ResponseState) => a.position - b.position);
@@ -299,23 +357,25 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
 
         const built: CompareRound[] = [];
         if (userMsgs.length === 0) return;
-        if (userMsgs.length === 1) {
-          const r0 = [...(byRoundIdx.get(0) ?? [])].sort(
+        const totalRounds = Math.max(userMsgs.length, byRoundIdx.size);
+        for (let i = 0; i < totalRounds; i++) {
+          const rs = [...(byRoundIdx.get(i) ?? [])].sort(
             (a, b) => a.position - b.position
           );
-          built.push({ prompt: userMsgs[0]!.content, responses: r0 });
-        } else {
-          for (let i = 0; i < userMsgs.length; i++) {
-            const rs = [...(byRoundIdx.get(i) ?? [])].sort(
-              (a, b) => a.position - b.position
-            );
-            built.push({ prompt: userMsgs[i]!.content, responses: rs });
-          }
+          const promptForRound =
+            userMsgs[i]?.content ?? userMsgs[userMsgs.length - 1]?.content ?? "";
+          built.push({
+            prompt: promptForRound,
+            responses: rs,
+            kind: roundKindByIdx.get(i) ?? "main",
+          });
         }
 
         setConversationId(data.conversation.id);
         setRounds(built);
         setPrompt(built[0]?.prompt ?? "");
+        setContinueByModelKey(seenContinue);
+        setUseInSynthesisByKey(seenSynthesis);
         setPhase("done");
         setShowRestoreBanner(true);
       } catch {
@@ -340,6 +400,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         conversationId,
         rounds: rounds.map((round) => ({
           prompt: round.prompt,
+          kind: round.kind,
           responses: round.responses.map((r) => ({
             key: r.key,
             position: r.position,
@@ -353,8 +414,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             tokensOut: r.tokensOut,
             latencyMs: r.latencyMs,
             scores: r.scores,
+            responseId: r.responseId,
+            roundKind: round.kind,
           })),
         })),
+        continueByModelKey,
+        useInSynthesisByResponseKey: useInSynthesisByKey,
       };
       writeCompareSnapshotToStorage(snap);
     } catch {
@@ -370,6 +435,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     conversationId,
     selectedValues,
     teamPresetId,
+    continueByModelKey,
+    useInSynthesisByKey,
   ]);
 
   useEffect(() => {
@@ -592,6 +659,16 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     setFollowUpPrompt("");
     setPhase("streaming");
 
+    // Fresh compare → fresh selection state. Every freshly-chosen model
+    // starts with "Continue with this model" turned on; every successful
+    // response will be eligible for Synthesis until the user opts out.
+    const seedContinue: Record<string, boolean> = {};
+    for (const m of selectedModels) {
+      seedContinue[modelKeyOf(m.provider, m.modelId)] = true;
+    }
+    setContinueByModelKey(seedContinue);
+    setUseInSynthesisByKey({});
+
     const model_ids = selectedModels.map((m) => ({
       provider: m.provider,
       model: m.modelId,
@@ -609,8 +686,11 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       tokensIn: 0,
       tokensOut: 0,
       scores: null,
+      responseId: null,
     }));
-    const r0: CompareRound[] = [{ prompt: prompt.trim(), responses: initial }];
+    const r0: CompareRound[] = [
+      { prompt: prompt.trim(), responses: initial, kind: "main" },
+    ];
     roundsRef.current = r0;
     setRounds(r0);
 
@@ -652,16 +732,29 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     });
 
     setPhase("saving");
+    await persistRoundAndAttachIds(streamedConversationId ?? null);
+    setPhase("done");
+  }
+
+  /**
+   * Persist the latest round and attach the server-assigned response_ids
+   * back onto the in-memory state. Also auto-selects each successful
+   * response into the "Use in Synthesis" pool. No scoring side-effects
+   * — Session 11 makes grading strictly user-initiated.
+   */
+  async function persistRoundAndAttachIds(streamedConvId: string | null) {
     const lastRound =
       roundsRef.current[roundsRef.current.length - 1] ?? null;
-    const savePrompt = lastRound?.prompt ?? prompt.trim();
-    const saveRows = lastRound?.responses ?? [];
+    if (!lastRound) return;
+    const savePrompt = lastRound.prompt;
+    const saveRows = lastRound.responses;
+
     try {
       const saveRes = await fetch("/api/compare/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          conversation_id: streamedConversationId ?? undefined,
+          conversation_id: streamedConvId ?? conversationId ?? undefined,
           prompt: savePrompt,
           responses: saveRows.map((r) => ({
             key: r.key,
@@ -682,20 +775,13 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         throw new Error(data.error || `Save failed (${saveRes.status})`);
       }
       if (data.conversation_id) setConversationId(data.conversation_id);
-      if (Array.isArray(data.scores)) {
-        const scoreByKey = new Map<string, ResponseCardScores>(
-          data.scores.map(
-            (s: ResponseCardScores & { key: string }) => [
-              s.key,
-              {
-                accuracy: s.accuracy,
-                clarity: s.clarity,
-                creativity: s.creativity,
-                usefulness: s.usefulness,
-                risk: s.risk,
-              },
-            ]
-          )
+
+      if (Array.isArray(data.response_ids)) {
+        const idByKey = new Map<string, string>(
+          data.response_ids.map((row: { key: string; id: string }) => [
+            row.key,
+            row.id,
+          ])
         );
         const cur = roundsRef.current;
         if (cur.length > 0) {
@@ -705,31 +791,66 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             ...last,
             responses: last.responses.map((r) => ({
               ...r,
-              scores: scoreByKey.get(r.key) ?? r.scores,
+              responseId: idByKey.get(r.key) ?? r.responseId,
             })),
           };
           const next = [...cur.slice(0, lastIdx), nextLast];
           roundsRef.current = next;
           setRounds(next);
+
+          // Default-include each successful response in Synthesis.
+          setUseInSynthesisByKey((prev) => {
+            const out = { ...prev };
+            for (const r of nextLast.responses) {
+              if (r.status === "done" && !r.error && r.content.trim()) {
+                if (out[r.key] === undefined) out[r.key] = true;
+              }
+            }
+            return out;
+          });
         }
       }
     } catch (err) {
-      setGlobalError(
-        err instanceof Error ? err.message : "Scoring pass failed"
-      );
+      setGlobalError(err instanceof Error ? err.message : "Save failed");
     }
-
-    setPhase("done");
   }
 
+  /**
+   * Main follow-up. Only fires for models marked "Continue with this
+   * model" on at least one prior response. Models opted out are kept in
+   * the workspace but skipped this round.
+   */
   async function runFollowUpCompare() {
     if (
       !followUpPrompt.trim() ||
       !conversationId ||
-      selectedModels.length === 0 ||
       phase === "streaming" ||
       retryingKey
     ) {
+      return;
+    }
+
+    // Build the participating model set from what's actually present in
+    // the workspace right now, not from the top-of-page checkboxes. The
+    // user picked their participants when running the first compare;
+    // we only honour their per-model "Continue" toggles here.
+    const knownModels = new Map<string, { provider: string; modelId: string }>();
+    for (const round of roundsRef.current) {
+      for (const r of round.responses) {
+        const mk = modelKeyOf(r.provider, r.model);
+        if (!knownModels.has(mk)) {
+          knownModels.set(mk, { provider: r.provider, modelId: r.model });
+        }
+      }
+    }
+    const participants = Array.from(knownModels.entries())
+      .filter(([mk]) => continueByModelKey[mk] !== false)
+      .map(([, v]) => v);
+
+    if (participants.length === 0) {
+      setGlobalError(
+        'No models have "Continue with this model" turned on. Turn it on for at least one model, or use "Ask this model" for a single-model follow-up.'
+      );
       return;
     }
 
@@ -744,12 +865,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         )
       ) + 1;
 
-    const model_ids = selectedModels.map((m) => ({
+    const model_ids = participants.map((m) => ({
       provider: m.provider,
       model: m.modelId,
     }));
 
-    const initial: ResponseState[] = selectedModels.map((m, i) => ({
+    const initial: ResponseState[] = participants.map((m, i) => ({
       key: `${m.provider}::${m.modelId}::${startPos + i}`,
       position: startPos + i,
       provider: m.provider,
@@ -761,11 +882,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       tokensIn: 0,
       tokensOut: 0,
       scores: null,
+      responseId: null,
     }));
 
     const appended: CompareRound[] = [
       ...roundsRef.current,
-      { prompt: followUpPrompt.trim(), responses: initial },
+      { prompt: followUpPrompt.trim(), responses: initial, kind: "main" },
     ];
     roundsRef.current = appended;
     setRounds(appended);
@@ -810,73 +932,112 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     });
 
     setPhase("saving");
-    const lastRound =
-      roundsRef.current[roundsRef.current.length - 1] ?? null;
-    const savePrompt = lastRound?.prompt ?? followUpPrompt.trim();
-    const saveRows = lastRound?.responses ?? [];
+    await persistRoundAndAttachIds(null);
+    setFollowUpPrompt("");
+    setPhase("done");
+  }
+
+  /**
+   * "Ask this model" — isolated single-model follow-up. The server only
+   * loads THIS model's prior outputs for context (peer answers are never
+   * surfaced) and tags the new row with round_kind='branch' so reloads
+   * label the round correctly.
+   */
+  async function askThisModel(
+    provider: string,
+    modelId: string,
+    branchPrompt: string
+  ) {
+    if (
+      !branchPrompt.trim() ||
+      !conversationId ||
+      phase === "streaming" ||
+      retryingKey ||
+      askingModelKey
+    ) {
+      return;
+    }
+
+    const mk = modelKeyOf(provider, modelId);
+    setAskingModelKey(mk);
+    setGlobalError(null);
+    setPhase("streaming");
+
+    const startPos =
+      Math.max(
+        -1,
+        ...roundsRef.current.flatMap((round) =>
+          round.responses.map((x) => x.position)
+        )
+      ) + 1;
+
+    const initialRow: ResponseState = {
+      key: `${provider}::${modelId}::${startPos}`,
+      position: startPos,
+      provider,
+      model: modelId,
+      modelLabel: getModelDisplayName(provider, modelId),
+      content: "",
+      status: "pending",
+      error: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      scores: null,
+      responseId: null,
+    };
+
+    const appended: CompareRound[] = [
+      ...roundsRef.current,
+      { prompt: branchPrompt.trim(), responses: [initialRow], kind: "branch" },
+    ];
+    roundsRef.current = appended;
+    setRounds(appended);
+
+    let res: Response;
     try {
-      const saveRes = await fetch("/api/compare/save", {
+      res = await fetch("/api/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          prompt: branchPrompt.trim(),
+          model_ids: [{ provider, model: modelId }],
+          project_id: selectedProjectId || null,
+          tone: selectedTone,
           conversation_id: conversationId,
-          prompt: savePrompt,
-          responses: saveRows.map((r) => ({
-            key: r.key,
-            position: r.position,
-            provider: r.provider,
-            model: r.model,
-            content: r.content,
-            tokens_in: r.tokensIn,
-            tokens_out: r.tokensOut,
-            latency_ms: r.latencyMs ?? 0,
-            error: r.error,
-          })),
+          ask_model: true,
         }),
       });
-      const data = await saveRes.json();
-      if (!saveRes.ok) {
-        throw new Error(data.error || `Save failed (${saveRes.status})`);
-      }
-      if (Array.isArray(data.scores)) {
-        const scoreByKey = new Map<string, ResponseCardScores>(
-          data.scores.map(
-            (s: ResponseCardScores & { key: string }) => [
-              s.key,
-              {
-                accuracy: s.accuracy,
-                clarity: s.clarity,
-                creativity: s.creativity,
-                usefulness: s.usefulness,
-                risk: s.risk,
-              },
-            ]
-          )
-        );
-        const cur = roundsRef.current;
-        if (cur.length > 0) {
-          const lastIdx = cur.length - 1;
-          const last = cur[lastIdx]!;
-          const nextLast = {
-            ...last,
-            responses: last.responses.map((r) => ({
-              ...r,
-              scores: scoreByKey.get(r.key) ?? r.scores,
-            })),
-          };
-          const next = [...cur.slice(0, lastIdx), nextLast];
-          roundsRef.current = next;
-          setRounds(next);
-        }
-      }
     } catch (err) {
-      setGlobalError(
-        err instanceof Error ? err.message : "Scoring pass failed"
-      );
+      setGlobalError(err instanceof Error ? err.message : "Network error");
+      setPhase("done");
+      setAskingModelKey(null);
+      const rolled = roundsRef.current.slice(0, -1);
+      roundsRef.current = rolled;
+      setRounds(rolled);
+      return;
     }
 
-    setFollowUpPrompt("");
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      setGlobalError(errText || `Request failed (${res.status})`);
+      setPhase("done");
+      setAskingModelKey(null);
+      const rolled = roundsRef.current.slice(0, -1);
+      roundsRef.current = rolled;
+      setRounds(rolled);
+      return;
+    }
+
+    await consumeSseStream(res, {
+      onMeta: (id) => {
+        setConversationId(id);
+      },
+    });
+
+    setPhase("saving");
+    await persistRoundAndAttachIds(null);
     setPhase("done");
+    setAskingModelKey(null);
   }
 
   function promptForResponseKey(key: string): string {
@@ -971,62 +1132,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
 
     await consumeSseStream(res, { filterKey: r.key });
 
-    try {
-      const saveRes = await fetch("/api/compare/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          conversation_id: conversationId,
-          prompt: roundPrompt,
-          responses: (() => {
-            const roundCtx = roundsRef.current.find((round) =>
-              round.responses.some((x) => x.key === r.key)
-            );
-            return (roundCtx?.responses ?? []).map((row) => ({
-              key: row.key,
-              position: row.position,
-              provider: row.provider,
-              model: row.model,
-              content: row.content,
-              tokens_in: row.tokensIn,
-              tokens_out: row.tokensOut,
-              latency_ms: row.latencyMs ?? 0,
-              error: row.error,
-            }));
-          })(),
-        }),
-      });
-      const data = await saveRes.json();
-      if (saveRes.ok && Array.isArray(data.scores)) {
-        const scoreByKey = new Map<string, ResponseCardScores>(
-          data.scores.map(
-            (s: ResponseCardScores & { key: string }) => [
-              s.key,
-              {
-                accuracy: s.accuracy,
-                clarity: s.clarity,
-                creativity: s.creativity,
-                usefulness: s.usefulness,
-                risk: s.risk,
-              },
-            ]
-          )
-        );
-        const cur = roundsRef.current;
-        const next = cur.map((round) => ({
-          ...round,
-          responses: round.responses.map((row) => ({
-            ...row,
-            scores: scoreByKey.get(row.key) ?? row.scores,
-          })),
-        }));
-        roundsRef.current = next;
-        setRounds(next);
-      }
-    } catch {
-      // scoring best-effort after retry
-    }
-
+    // Persistence happens server-side in the stream. We don't auto-score
+    // (Session 11) so there's no follow-up call here. If the user wants
+    // scores after a retry, they'll click "Grade answer" on the card.
     setRetryingKey(null);
     setPhase("done");
   }
@@ -1043,8 +1151,45 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     setRounds(next);
   }
 
+  /**
+   * Build the list of response_ids the user has marked "Use in Synthesis".
+   * Only `done`+non-empty responses with a server-assigned `responseId`
+   * qualify (we can't synthesize from rows that haven't been persisted).
+   */
+  function selectedSynthesisResponseIds(): string[] {
+    const ids: string[] = [];
+    for (const round of roundsRef.current) {
+      for (const r of round.responses) {
+        if (!r.responseId) continue;
+        if (r.status !== "done" || r.error || !r.content.trim()) continue;
+        if (useInSynthesisByKey[r.key] === false) continue;
+        ids.push(r.responseId);
+      }
+    }
+    return ids;
+  }
+
+  function selectedSynthesisCount(): number {
+    let n = 0;
+    for (const round of roundsRef.current) {
+      for (const r of round.responses) {
+        if (r.status !== "done" || r.error || !r.content.trim()) continue;
+        if (useInSynthesisByKey[r.key] === false) continue;
+        n++;
+      }
+    }
+    return n;
+  }
+
   async function createSynthesis() {
     if (!conversationId || synthLoading) return;
+    const sourceIds = selectedSynthesisResponseIds();
+    if (sourceIds.length < 2) {
+      setGlobalError(
+        'Pick at least two responses with "Use in Synthesis" before generating.'
+      );
+      return;
+    }
     setSynthLoading(true);
     setGlobalError(null);
     try {
@@ -1056,6 +1201,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
           conversation_id: conversationId,
           tone: selectedTone,
           project_id: selectedProjectId || null,
+          source_response_ids: sourceIds,
         }),
       });
       const data = await res.json();
@@ -1068,14 +1214,172 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     }
   }
 
-  const successCount = flatResponses.filter(
-    (r) => r.status === "done" && !r.error && r.content.trim()
-  ).length;
+  /**
+   * On-demand grading. `responseKeys` may be 1 (Grade answer on a card)
+   * or many (Grade selected responses). The route only touches rows we
+   * own (re-verified server-side via the conversation's user_id).
+   */
+  async function gradeResponses(responseKeys: string[]) {
+    if (!conversationId || responseKeys.length === 0) return;
+
+    // Resolve keys to server response_ids and build a key↔id index for
+    // applying scores back onto the cards.
+    const ids: string[] = [];
+    const idByKey = new Map<string, string>();
+    const keyById = new Map<string, string>();
+    for (const round of roundsRef.current) {
+      for (const r of round.responses) {
+        if (!responseKeys.includes(r.key)) continue;
+        if (!r.responseId) continue;
+        if (r.status !== "done" || r.error || !r.content.trim()) continue;
+        ids.push(r.responseId);
+        idByKey.set(r.key, r.responseId);
+        keyById.set(r.responseId, r.key);
+      }
+    }
+    if (ids.length === 0) {
+      setGlobalError("Nothing to grade — pick at least one complete response.");
+      return;
+    }
+
+    setGlobalError(null);
+    const keysToMark = Array.from(idByKey.keys());
+    setGradingKeys((prev) => {
+      const next = { ...prev };
+      for (const k of keysToMark) next[k] = true;
+      return next;
+    });
+
+    try {
+      const res = await fetch("/api/compare/score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: conversationId,
+          response_ids: ids,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Grading failed");
+      if (Array.isArray(data.scores)) {
+        const scoreByKey = new Map<string, ResponseCardScores>();
+        for (const s of data.scores as (ResponseCardScores & {
+          key: string;
+          response_id: string | null;
+        })[]) {
+          // Prefer the server-supplied response_id round-trip if present.
+          const cardKey = s.response_id ? keyById.get(s.response_id) : s.key;
+          if (!cardKey) continue;
+          scoreByKey.set(cardKey, {
+            accuracy: s.accuracy,
+            clarity: s.clarity,
+            creativity: s.creativity,
+            usefulness: s.usefulness,
+            risk: s.risk,
+          });
+        }
+        const cur = roundsRef.current;
+        const next = cur.map((round) => ({
+          ...round,
+          responses: round.responses.map((row) => ({
+            ...row,
+            scores: scoreByKey.get(row.key) ?? row.scores,
+          })),
+        }));
+        roundsRef.current = next;
+        setRounds(next);
+      }
+      if (data.scoring_error) {
+        setGlobalError(`Grading completed with errors: ${data.scoring_error}`);
+      }
+    } catch (err) {
+      setGlobalError(err instanceof Error ? err.message : "Grading failed");
+    } finally {
+      setGradingKeys((prev) => {
+        const next = { ...prev };
+        for (const k of keysToMark) delete next[k];
+        return next;
+      });
+    }
+  }
+
+  async function gradeSelected() {
+    if (!conversationId || batchGrading) return;
+    const keys: string[] = [];
+    for (const round of roundsRef.current) {
+      for (const r of round.responses) {
+        if (useInSynthesisByKey[r.key] === false) continue;
+        if (r.status !== "done" || r.error || !r.content.trim()) continue;
+        if (!r.responseId) continue;
+        keys.push(r.key);
+      }
+    }
+    if (keys.length === 0) {
+      setGlobalError(
+        'Nothing selected. Use "Use in Synthesis" to mark responses to grade.'
+      );
+      return;
+    }
+    setBatchGrading(true);
+    try {
+      await gradeResponses(keys);
+    } finally {
+      setBatchGrading(false);
+    }
+  }
+
   const allComplete =
     flatResponses.length > 0 &&
     flatResponses.every((r) => r.status === "done" || r.status === "error");
   const canContinueInChat =
     allComplete && phase !== "streaming" && !retryingKey;
+
+  // ─── Per-model derived state (Session 11) ───────────────────────────────
+  //
+  // The "Continue with this model" / "Ask this model" controls only make
+  // sense on ONE card per model — the latest one. Otherwise toggling on
+  // an older round would create a state that contradicts a newer card.
+  //
+  // We compute the latest *complete* card per model so transient
+  // streaming rows don't bounce the control between cards while a round
+  // is in flight.
+  const latestKeyByModel = useMemo(() => {
+    const map = new Map<string, string>();
+    for (let i = rounds.length - 1; i >= 0; i--) {
+      const round = rounds[i]!;
+      for (const r of round.responses) {
+        if (r.status !== "done") continue;
+        const mk = modelKeyOf(r.provider, r.model);
+        if (!map.has(mk)) map.set(mk, r.key);
+      }
+    }
+    return map;
+  }, [rounds]);
+
+  // Models that appear ANYWHERE in the workspace — used to surface the
+  // per-model summary above the main follow-up box ("3 of 4 will continue").
+  const workspaceModels = useMemo(() => {
+    const seen = new Map<string, { provider: string; model: string; label: string }>();
+    for (const round of rounds) {
+      for (const r of round.responses) {
+        const mk = modelKeyOf(r.provider, r.model);
+        if (!seen.has(mk)) {
+          seen.set(mk, {
+            provider: r.provider,
+            model: r.model,
+            label: r.modelLabel,
+          });
+        }
+      }
+    }
+    return Array.from(seen.entries()).map(([mk, v]) => ({ mk, ...v }));
+  }, [rounds]);
+
+  const continueCount = workspaceModels.filter(
+    (m) => continueByModelKey[m.mk] !== false
+  ).length;
+
+  const synthesisCount = selectedSynthesisCount();
 
   if (connections.length === 0) {
     return (
@@ -1297,51 +1601,115 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
           {rounds.map((round, ri) => (
             <div key={`round-${ri}`} className="space-y-4">
               {ri > 0 && <div className="border-t border-dashed pt-6" aria-hidden />}
-              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Round {ri + 1}
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <span>Round {ri + 1}</span>
+                {round.kind === "branch" && round.responses[0] && (
+                  <span className="rounded-full border border-dashed px-2 py-0.5 normal-case text-[10px] font-normal tracking-normal">
+                    Solo follow-up to {round.responses[0].modelLabel}
+                  </span>
+                )}
               </div>
               <p className="text-sm text-muted-foreground whitespace-pre-wrap border-l-2 border-primary/25 pl-3">
                 {round.prompt}
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {round.responses.map((r) => (
-                  <ResponseCard
-                    key={r.key}
-                    provider={r.provider}
-                    providerLabel={getProviderLabel(r.provider)}
-                    model={r.model}
-                    modelLabel={r.modelLabel}
-                    content={r.content}
-                    status={
-                      retryingKey === r.key
-                        ? "streaming"
-                        : r.status === "pending" && phase === "streaming"
-                          ? "pending"
-                          : r.status
-                    }
-                    error={r.error}
-                    tokensIn={r.tokensIn}
-                    tokensOut={r.tokensOut}
-                    cost={calcCompareModelCost(
-                      r.provider,
-                      r.model,
-                      r.tokensIn,
-                      r.tokensOut
-                    )}
-                    latencyMs={r.latencyMs}
-                    scores={r.scores}
-                    onRetry={
-                      r.status === "error" && conversationId && !retryingKey
-                        ? () => void retryOne(r)
-                        : undefined
-                    }
-                    onContinueInChat={
-                      canContinueInChat && r.status === "done" && r.content.trim()
-                        ? () => continueModelToChat(r)
-                        : undefined
-                    }
-                  />
-                ))}
+              <div
+                className={
+                  round.kind === "branch"
+                    ? "grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl"
+                    : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+                }
+              >
+                {round.responses.map((r) => {
+                  const mk = modelKeyOf(r.provider, r.model);
+                  const isLatestForModel = latestKeyByModel.get(mk) === r.key;
+                  const isComplete =
+                    r.status === "done" && !r.error && !!r.content.trim();
+                  return (
+                    <ResponseCard
+                      key={r.key}
+                      provider={r.provider}
+                      providerLabel={getProviderLabel(r.provider)}
+                      model={r.model}
+                      modelLabel={r.modelLabel}
+                      content={r.content}
+                      status={
+                        retryingKey === r.key
+                          ? "streaming"
+                          : r.status === "pending" && phase === "streaming"
+                            ? "pending"
+                            : r.status
+                      }
+                      error={r.error}
+                      tokensIn={r.tokensIn}
+                      tokensOut={r.tokensOut}
+                      cost={calcCompareModelCost(
+                        r.provider,
+                        r.model,
+                        r.tokensIn,
+                        r.tokensOut
+                      )}
+                      latencyMs={r.latencyMs}
+                      scores={r.scores}
+                      isBranch={round.kind === "branch"}
+                      onRetry={
+                        r.status === "error" && conversationId && !retryingKey
+                          ? () => void retryOne(r)
+                          : undefined
+                      }
+                      onContinueInChat={
+                        canContinueInChat && isComplete
+                          ? () => continueModelToChat(r)
+                          : undefined
+                      }
+                      useInSynthesis={
+                        isComplete
+                          ? {
+                              checked: useInSynthesisByKey[r.key] !== false,
+                              onChange: (next) =>
+                                setUseInSynthesisByKey((prev) => ({
+                                  ...prev,
+                                  [r.key]: next,
+                                })),
+                            }
+                          : undefined
+                      }
+                      continueWithModel={
+                        isComplete && isLatestForModel
+                          ? {
+                              checked: continueByModelKey[mk] !== false,
+                              onChange: (next) =>
+                                setContinueByModelKey((prev) => ({
+                                  ...prev,
+                                  [mk]: next,
+                                })),
+                            }
+                          : undefined
+                      }
+                      askThisModel={
+                        isComplete &&
+                        isLatestForModel &&
+                        conversationId &&
+                        !retryingKey
+                          ? {
+                              onSubmit: (text) =>
+                                askThisModel(r.provider, r.model, text),
+                              isStreaming:
+                                askingModelKey === mk &&
+                                phase === "streaming",
+                            }
+                          : undefined
+                      }
+                      grade={
+                        isComplete
+                          ? {
+                              onClick: () => gradeResponses([r.key]),
+                              isGrading: !!gradingKeys[r.key],
+                            }
+                          : undefined
+                      }
+                    />
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -1359,32 +1727,67 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             </div>
           )}
 
-          {phase === "done" && allComplete && !retryingKey && successCount >= 2 && (
-            <Button
-              className="w-full gap-2"
-              variant="default"
-              onClick={createSynthesis}
-              disabled={!conversationId || synthLoading}
-            >
-              <Sparkles className="h-4 w-4" />
-              {synthLoading
-                ? "Creating LettiB Synthesis…"
-                : "Create LettiB Synthesis"}
-            </Button>
-          )}
-          {phase === "done" && allComplete && successCount < 2 && (
-            <p className="text-xs text-center text-muted-foreground">
-              Need at least 2 successful responses to synthesize.
-            </p>
+          {/* ── Workspace actions: Synthesis + Grade selected ────────────── */}
+          {phase === "done" && allComplete && !retryingKey && conversationId && (
+            <div className="space-y-3 border-t pt-6">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <p className="text-xs text-muted-foreground">
+                  {synthesisCount} response{synthesisCount === 1 ? "" : "s"}{" "}
+                  selected for synthesis ·{" "}
+                  {continueCount} of {workspaceModels.length} model
+                  {workspaceModels.length === 1 ? "" : "s"} will continue
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => void gradeSelected()}
+                  disabled={batchGrading || synthesisCount === 0}
+                >
+                  {batchGrading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Scale className="h-3.5 w-3.5" />
+                  )}
+                  Grade selected responses
+                </Button>
+              </div>
+
+              <Button
+                className="w-full gap-2"
+                variant="default"
+                onClick={createSynthesis}
+                disabled={
+                  !conversationId || synthLoading || synthesisCount < 2
+                }
+              >
+                <Sparkles className="h-4 w-4" />
+                {synthLoading
+                  ? "Creating LettiB Synthesis…"
+                  : `Generate Synthesis from ${synthesisCount} selected response${
+                      synthesisCount === 1 ? "" : "s"
+                    }`}
+              </Button>
+              {synthesisCount < 2 && (
+                <p className="text-xs text-center text-muted-foreground">
+                  Pick at least two responses with “Use in Synthesis” to
+                  enable Synthesis.
+                </p>
+              )}
+            </div>
           )}
 
+          {/* ── Main follow-up ───────────────────────────────────────────── */}
           {phase === "done" && allComplete && !retryingKey && conversationId && (
             <div className="space-y-3 border-t pt-6">
               <p className="text-xs font-medium text-muted-foreground">
-                Ask a follow-up
+                Ask a follow-up to the {continueCount} model
+                {continueCount === 1 ? "" : "s"} marked “Continue with this
+                model”
               </p>
               <Textarea
-                placeholder="Continue the thread with the same selected models…"
+                placeholder="Continue the thread — only models with 'Continue with this model' on will reply…"
                 className="resize-none min-h-[80px]"
                 value={followUpPrompt}
                 onChange={(e) => setFollowUpPrompt(e.target.value)}
@@ -1396,13 +1799,20 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                 onClick={() => void runFollowUpCompare()}
                 disabled={
                   !followUpPrompt.trim() ||
-                  selectedModels.length === 0 ||
+                  continueCount === 0 ||
                   !!retryingKey
                 }
               >
                 <Zap className="h-4 w-4" />
                 Continue Compare
               </Button>
+              {continueCount === 0 && workspaceModels.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No models will receive this follow-up. Turn on “Continue
+                  with this model” on at least one card, or use “Ask this
+                  model” on a card for a single-model follow-up.
+                </p>
+              )}
             </div>
           )}
         </div>
