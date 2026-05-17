@@ -52,13 +52,16 @@ type ModelPick = {
   modelId: string;
 };
 
-function buildModelPicks(connections: CompareConnection[]): ModelPick[] {
+function buildModelPicks(
+  connections: CompareConnection[],
+  builtinGroqAvailable: boolean
+): ModelPick[] {
   const catalog = MODELS_CATALOG as Record<
     string,
     readonly { id: string; name: string }[]
   >;
 
-  return connections.flatMap((conn) => {
+  const picks = connections.flatMap((conn) => {
     if (conn.provider === "custom") {
       const modelId = conn.custom_model_name || "custom";
       return [
@@ -78,6 +81,23 @@ function buildModelPicks(connections: CompareConnection[]): ModelPick[] {
       modelId: m.id,
     }));
   });
+
+  // Mirror AI Teams: built-in Groq models when host has GROQ_API_KEY, even
+  // without a user api_connections row (Settings shows this as "Built-in").
+  if (builtinGroqAvailable && !picks.some((p) => p.provider === "groq")) {
+    const groqModels = catalog.groq ?? [];
+    return [
+      ...picks,
+      ...groqModels.map((m) => ({
+        value: `groq::${m.id}`,
+        label: `${getProviderLabel("groq")} — ${m.name}`,
+        provider: "groq",
+        modelId: m.id,
+      })),
+    ];
+  }
+
+  return picks;
 }
 
 type ResponseState = {
@@ -114,6 +134,8 @@ function modelKeyOf(provider: string, model: string): string {
 interface CompareUIProps {
   projects: CompareProject[];
   connections: CompareConnection[];
+  /** Host has GROQ_API_KEY — Groq models are available without a Vault row. */
+  builtinGroqAvailable?: boolean;
   teams: Team[];
 }
 
@@ -137,11 +159,19 @@ function snapshotRowToState(
   };
 }
 
-export function CompareUI({ projects, connections, teams }: CompareUIProps) {
+export function CompareUI({
+  projects,
+  connections,
+  builtinGroqAvailable = false,
+  teams,
+}: CompareUIProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const compareIdFromUrl = searchParams.get("c");
-  const modelPicks = useMemo(() => buildModelPicks(connections), [connections]);
+  const modelPicks = useMemo(
+    () => buildModelPicks(connections, builtinGroqAvailable),
+    [connections, builtinGroqAvailable]
+  );
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
     projects[0]?.id ?? ""
@@ -1552,7 +1582,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
 
   const synthesisCount = selectedSynthesisCount();
 
-  if (connections.length === 0) {
+  if (connections.length === 0 && !builtinGroqAvailable) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center gap-4">
         <div className="text-4xl">🔑</div>
