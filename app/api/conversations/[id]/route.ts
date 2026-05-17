@@ -57,29 +57,40 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const [{ data: messages }, { data: modelResponses }] = await Promise.all([
-    sc
-      .from("messages")
-      .select(
-        "id, role, content, provider, model, tokens_in, tokens_out, created_at"
-      )
-      .eq("conversation_id", conv.id)
-      .order("created_at", { ascending: true }),
-    conv.mode === "compare"
-      ? sc
-          .from("model_responses")
-          .select(
-            "id, provider, model, content, tokens_in, tokens_out, cost_usd, latency_ms, error, score_accuracy, score_clarity, score_creativity, score_usefulness, score_risk, position, round_index, round_kind, created_at"
-          )
-          .eq("conversation_id", conv.id)
-          .order("position", { ascending: true })
-      : Promise.resolve({ data: [] }),
-  ]);
+  const [{ data: messages }, { data: modelResponses }, { data: latestSynth }] =
+    await Promise.all([
+      sc
+        .from("messages")
+        .select(
+          "id, role, content, provider, model, tokens_in, tokens_out, created_at"
+        )
+        .eq("conversation_id", conv.id)
+        .order("created_at", { ascending: true }),
+      conv.mode === "compare"
+        ? sc
+            .from("model_responses")
+            .select(
+              "id, provider, model, content, tokens_in, tokens_out, cost_usd, latency_ms, error, score_accuracy, score_clarity, score_creativity, score_usefulness, score_risk, position, round_index, round_kind, created_at"
+            )
+            .eq("conversation_id", conv.id)
+            .order("position", { ascending: true })
+        : Promise.resolve({ data: [] }),
+      sc
+        .from("syntheses")
+        .select("id")
+        .eq("conversation_id", conv.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
+  const synthRow = latestSynth as { id: string } | null;
 
   return NextResponse.json({
     conversation: conv,
     messages: messages ?? [],
     model_responses: modelResponses ?? [],
+    latest_synthesis: synthRow ? { id: synthRow.id } : null,
   });
 }
 

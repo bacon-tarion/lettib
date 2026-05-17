@@ -96,6 +96,7 @@ export interface ResponseCardProps {
 function providerHint(provider: string, error?: string | null): string | null {
   if (!error) return null;
   const e = error.toLowerCase();
+
   const providerLabel: Record<string, string> = {
     anthropic: "Anthropic",
     openai: "OpenAI",
@@ -138,6 +139,12 @@ function providerHint(provider: string, error?: string | null): string | null {
     e.includes("enotfound")
   ) {
     return `Couldn't reach ${label}. Check connectivity, then verify your key in`;
+  }
+  if (provider === "google") {
+    return "Could not reach Google Gemini. Check your Gemini API key, billing, model access, and quota in";
+  }
+  if (provider === "xai") {
+    return "Could not reach xAI (Grok). Check your xAI API key, model access, and quota in";
   }
   return null;
 }

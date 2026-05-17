@@ -384,27 +384,32 @@ export async function POST(req: NextRequest) {
     }
     conversationId = bodyConversationId;
 
-    const { data: maxPosRow } = await serviceClient
-      .from("model_responses")
-      .select("position")
-      .eq("conversation_id", conversationId)
-      .order("position", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const startPos =
-      ((maxPosRow as { position: number } | null)?.position ?? -1) + 1;
+    const { data: allocData, error: allocErr } = await serviceClient.rpc(
+      "compare_alloc_next_round",
+      {
+        p_conversation_id: conversationId,
+        p_lane_count: modelIds.length,
+      }
+    );
 
-    const { data: maxRoundRow } = await serviceClient
-      .from("model_responses")
-      .select("round_index")
-      .eq("conversation_id", conversationId)
-      .order("round_index", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const nextRound =
-      ((maxRoundRow as { round_index: number } | null)?.round_index ?? -1) + 1;
-    insertRoundIndex = nextRound;
+    if (allocErr || !allocData?.length) {
+      return new Response(
+        JSON.stringify({
+          error: `Failed to allocate compare round (run migration 029?): ${
+            allocErr?.message ?? "unknown"
+          }`,
+        }),
+        { status: 500 }
+      );
+    }
+
+    const allocRow = allocData[0] as {
+      round_index: number;
+      start_position: number;
+    };
+    insertRoundIndex = allocRow.round_index;
     insertRoundKind = isAskModel ? "branch" : "main";
+    const startPos = allocRow.start_position;
 
     const { error: msgError } = await serviceClient.from("messages").insert({
       conversation_id: conversationId,

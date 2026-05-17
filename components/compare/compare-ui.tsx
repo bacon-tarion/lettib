@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Loader2, Scale, Sparkles, Zap, Settings } from "lucide-react";
+import Link from "next/link";
+import { Loader2, Scale, Sparkles, Zap, Settings, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -149,10 +150,16 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   const [prompt, setPrompt] = useState("");
   const [followUpPrompt, setFollowUpPrompt] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
+  /** True while the shared Run Compare OR main follow-up SSE is active (for Stop waiting). */
+  const [mainBatchStreaming, setMainBatchStreaming] = useState(false);
+  /** True from main follow-up POST start until persist completes (serialization only). */
+  const [followUpInFlight, setFollowUpInFlight] = useState(false);
   const [rounds, setRounds] = useState<CompareRound[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [synthLoading, setSynthLoading] = useState(false);
+  /** Latest synthesis for this compare conversation (for quick navigation back). */
+  const [latestSynthesisId, setLatestSynthesisId] = useState<string | null>(null);
   const [showRestoreBanner, setShowRestoreBanner] = useState(false);
   const [usage, setUsage] = useState<{
     used: number;
@@ -206,7 +213,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
    * silently hang (Gemini "failed to connect", Grok rate-limit) block
    * synthesis / follow-up for the full 5-minute per-member timeout.
    */
-  const abortRef = useRef<AbortController | null>(null);
+  /** In-flight Run Compare / main follow-up SSE (stopped by "Stop waiting…"). */
+  const mainBatchAbortRef = useRef<AbortController | null>(null);
+  /** In-flight "Ask this model" SSE — independent from the main batch. */
+  const branchAskAbortRef = useRef<AbortController | null>(null);
 
   const flatResponses = useMemo(
     () => rounds.flatMap((x) => x.responses),
@@ -294,6 +304,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             score_usefulness: number | null;
             score_risk: number | null;
           }[];
+          latest_synthesis?: { id: string } | null;
         };
 
         if (data.conversation.mode !== "compare") return;
@@ -383,17 +394,39 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         setUseInSynthesisByKey(seenSynthesis);
         setPhase("done");
         setShowRestoreBanner(true);
+        setLatestSynthesisId(data.latest_synthesis?.id ?? null);
       } catch {
         /* ignore */
       }
     })();
   }, [compareIdFromUrl, projects]);
 
+  /** Keep “View latest synthesis” in sync when working in a live session. */
+  useEffect(() => {
+    if (!conversationId) {
+      setLatestSynthesisId(null);
+      return;
+    }
+    void (async () => {
+      try {
+        const res = await fetch(`/api/conversations/${conversationId}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          latest_synthesis?: { id: string } | null;
+        };
+        setLatestSynthesisId(data.latest_synthesis?.id ?? null);
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, [conversationId]);
+
   useEffect(() => {
     const allTerminal =
       flatResponses.length > 0 &&
       flatResponses.every((r) => r.status === "done" || r.status === "error");
-    if (!allTerminal || phase === "streaming" || retryingKey) return;
+    if (!allTerminal || mainBatchStreaming || followUpInFlight || retryingKey)
+      return;
     try {
       const snap: CompareStateSnapshotV2 = {
         version: 2,
@@ -433,7 +466,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   }, [
     flatResponses,
     rounds,
-    phase,
+    mainBatchStreaming,
+    followUpInFlight,
     retryingKey,
     selectedProjectId,
     selectedTone,
@@ -678,7 +712,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         }
       }
 
-      const stuckErrorMessage = opts.abortedMessage ?? "Stream ended unexpectedly";
+      const stuckErrorMessage =
+        opts.abortedMessage ??
+        "Stopped waiting on this model — it did not respond in time.";
       const stuck = roundsRef.current.flatMap((round) =>
         round.responses.filter(
           (r) =>
@@ -726,13 +762,13 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
    * lanes. Aborts the in-flight /api/compare fetch. The reader in
    * consumeSseStream catches AbortError, the per-lane cleanup marks any
    * still-pending lanes as errored with our abortedMessage, and the
-   * runCompare / runFollowUpCompare / askThisModel call site transitions
-   * phase → "done" so the workspace fully unlocks.
+   * runCompare / runFollowUpCompare ends. "Ask this model" uses a separate
+   * controller and is unaffected.
    */
   function cancelInFlightStream() {
-    const ctrl = abortRef.current;
+    const ctrl = mainBatchAbortRef.current;
     if (!ctrl) return;
-    abortRef.current = null;
+    mainBatchAbortRef.current = null;
     try {
       ctrl.abort();
     } catch {
@@ -759,6 +795,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     setGlobalError(null);
     setConversationId(null);
     setFollowUpPrompt("");
+    setMainBatchStreaming(true);
     setPhase("streaming");
 
     // Fresh compare → fresh selection state. Every freshly-chosen model
@@ -797,7 +834,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     setRounds(r0);
 
     const controller = new AbortController();
-    abortRef.current = controller;
+    mainBatchAbortRef.current = controller;
 
     let res: Response;
     try {
@@ -819,7 +856,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       setPhase("idle");
       setRounds([]);
       roundsRef.current = [];
-      abortRef.current = null;
+      mainBatchAbortRef.current = null;
+      setMainBatchStreaming(false);
       return;
     }
 
@@ -829,7 +867,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       setPhase("idle");
       setRounds([]);
       roundsRef.current = [];
-      abortRef.current = null;
+      mainBatchAbortRef.current = null;
+      setMainBatchStreaming(false);
       return;
     }
 
@@ -840,12 +879,13 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         setConversationId(id);
       },
       abortedMessage:
-        "Stopped waiting on this model — it didn't respond in time.",
+        "Stopped waiting on this model — it did not respond in time.",
     });
-    abortRef.current = null;
+    mainBatchAbortRef.current = null;
+    setMainBatchStreaming(false);
 
     setPhase("saving");
-    await persistRoundAndAttachIds(streamedConversationId ?? null);
+    await persistRoundAndAttachIds(streamedConversationId ?? null, 0);
     setPhase("done");
   }
 
@@ -855,12 +895,18 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
    * response into the "Use in Synthesis" pool. No scoring side-effects
    * — Session 11 makes grading strictly user-initiated.
    */
-  async function persistRoundAndAttachIds(streamedConvId: string | null) {
-    const lastRound =
-      roundsRef.current[roundsRef.current.length - 1] ?? null;
-    if (!lastRound) return;
-    const savePrompt = lastRound.prompt;
-    const saveRows = lastRound.responses;
+  async function persistRoundAndAttachIds(
+    streamedConvId: string | null,
+    roundIndex?: number
+  ) {
+    const idx =
+      roundIndex !== undefined
+        ? roundIndex
+        : roundsRef.current.length - 1;
+    const targetRound = roundsRef.current[idx] ?? null;
+    if (!targetRound) return;
+    const savePrompt = targetRound.prompt;
+    const saveRows = targetRound.responses;
 
     try {
       const saveRes = await fetch("/api/compare/save", {
@@ -897,24 +943,23 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
           ])
         );
         const cur = roundsRef.current;
-        if (cur.length > 0) {
-          const lastIdx = cur.length - 1;
-          const last = cur[lastIdx]!;
-          const nextLast = {
-            ...last,
-            responses: last.responses.map((r) => ({
+        if (cur.length > 0 && idx >= 0 && idx < cur.length) {
+          const round = cur[idx]!;
+          const nextRound = {
+            ...round,
+            responses: round.responses.map((r) => ({
               ...r,
               responseId: idByKey.get(r.key) ?? r.responseId,
             })),
           };
-          const next = [...cur.slice(0, lastIdx), nextLast];
+          const next = [...cur.slice(0, idx), nextRound, ...cur.slice(idx + 1)];
           roundsRef.current = next;
           setRounds(next);
 
           // Default-include each successful response in Synthesis.
           setUseInSynthesisByKey((prev) => {
             const out = { ...prev };
-            for (const r of nextLast.responses) {
+            for (const r of nextRound.responses) {
               if (r.status === "done" && !r.error && r.content.trim()) {
                 if (out[r.key] === undefined) out[r.key] = true;
               }
@@ -937,7 +982,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     if (
       !followUpPrompt.trim() ||
       !conversationId ||
-      phase === "streaming" ||
+      followUpInFlight ||
       retryingKey
     ) {
       return;
@@ -968,7 +1013,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     }
 
     setGlobalError(null);
-    setPhase("streaming");
+    setFollowUpInFlight(true);
+    setMainBatchStreaming(true);
 
     const startPos =
       Math.max(
@@ -1004,9 +1050,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     ];
     roundsRef.current = appended;
     setRounds(appended);
+    const followUpRoundIndex = appended.length - 1;
 
     const controller = new AbortController();
-    abortRef.current = controller;
+    mainBatchAbortRef.current = controller;
 
     let res: Response;
     try {
@@ -1027,8 +1074,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
         setGlobalError(err instanceof Error ? err.message : "Network error");
       }
-      setPhase("done");
-      abortRef.current = null;
+      setFollowUpInFlight(false);
+      setMainBatchStreaming(false);
+      mainBatchAbortRef.current = null;
       const rolled = roundsRef.current.slice(0, -1);
       roundsRef.current = rolled;
       setRounds(rolled);
@@ -1038,8 +1086,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       setGlobalError(errText || `Request failed (${res.status})`);
-      setPhase("done");
-      abortRef.current = null;
+      setFollowUpInFlight(false);
+      setMainBatchStreaming(false);
+      mainBatchAbortRef.current = null;
       const rolled = roundsRef.current.slice(0, -1);
       roundsRef.current = rolled;
       setRounds(rolled);
@@ -1051,21 +1100,19 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         setConversationId(id);
       },
       abortedMessage:
-        "Stopped waiting on this model — it didn't respond in time.",
+        "Stopped waiting on this model — it did not respond in time.",
     });
-    abortRef.current = null;
+    mainBatchAbortRef.current = null;
+    setMainBatchStreaming(false);
 
-    setPhase("saving");
-    await persistRoundAndAttachIds(null);
+    await persistRoundAndAttachIds(null, followUpRoundIndex);
     setFollowUpPrompt("");
-    setPhase("done");
+    setFollowUpInFlight(false);
   }
 
   /**
-   * "Ask this model" — isolated single-model follow-up. The server only
-   * loads THIS model's prior outputs for context (peer answers are never
-   * surfaced) and tags the new row with round_kind='branch' so reloads
-   * label the round correctly.
+   * "Ask this model" — isolated single-model follow-up. Independent from the
+   * main batch `phase`: it must work while other lanes are still pending.
    */
   async function askThisModel(
     provider: string,
@@ -1075,7 +1122,6 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     if (
       !branchPrompt.trim() ||
       !conversationId ||
-      phase === "streaming" ||
       retryingKey ||
       askingModelKey
     ) {
@@ -1085,7 +1131,6 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     const mk = modelKeyOf(provider, modelId);
     setAskingModelKey(mk);
     setGlobalError(null);
-    setPhase("streaming");
 
     const startPos =
       Math.max(
@@ -1116,9 +1161,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     ];
     roundsRef.current = appended;
     setRounds(appended);
+    const branchRoundIndex = appended.length - 1;
 
     const controller = new AbortController();
-    abortRef.current = controller;
+    branchAskAbortRef.current = controller;
 
     let res: Response;
     try {
@@ -1139,9 +1185,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
         setGlobalError(err instanceof Error ? err.message : "Network error");
       }
-      setPhase("done");
       setAskingModelKey(null);
-      abortRef.current = null;
+      branchAskAbortRef.current = null;
       const rolled = roundsRef.current.slice(0, -1);
       roundsRef.current = rolled;
       setRounds(rolled);
@@ -1151,9 +1196,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       setGlobalError(errText || `Request failed (${res.status})`);
-      setPhase("done");
       setAskingModelKey(null);
-      abortRef.current = null;
+      branchAskAbortRef.current = null;
       const rolled = roundsRef.current.slice(0, -1);
       roundsRef.current = rolled;
       setRounds(rolled);
@@ -1165,13 +1209,11 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         setConversationId(id);
       },
       abortedMessage:
-        "Stopped waiting on this model — it didn't respond in time.",
+        "Stopped waiting on this model — it did not respond in time.",
     });
-    abortRef.current = null;
+    branchAskAbortRef.current = null;
 
-    setPhase("saving");
-    await persistRoundAndAttachIds(null);
-    setPhase("done");
+    await persistRoundAndAttachIds(null, branchRoundIndex);
     setAskingModelKey(null);
   }
 
@@ -1191,25 +1233,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
 
   async function retryOne(r: ResponseState) {
     const roundPrompt = promptForResponseKey(r.key);
-    if (
-      !roundPrompt.trim() ||
-      !conversationId ||
-      phase === "streaming" ||
-      retryingKey
-    ) {
+    if (!roundPrompt.trim() || !conversationId || retryingKey) {
       return;
     }
 
     setGlobalError(null);
     setRetryingKey(r.key);
-    setPhase("streaming");
-
-    // Clicking "Retry model" is itself a re-engagement signal. Re-enable
-    // both toggles so a successful retry immediately participates again
-    // — otherwise the user has to do an extra two clicks after retry.
-    const mk = modelKeyOf(r.provider, r.model);
-    setContinueByModelKey((prev) => ({ ...prev, [mk]: true }));
-    setUseInSynthesisByKey((prev) => ({ ...prev, [r.key]: true }));
 
     updateCard(r.key, {
       status: "pending",
@@ -1238,7 +1267,6 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Network error");
       setRetryingKey(null);
-      setPhase("done");
       return;
     }
 
@@ -1246,17 +1274,32 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       const errText = await res.text().catch(() => "");
       setGlobalError(errText || `Request failed (${res.status})`);
       setRetryingKey(null);
-      setPhase("done");
       return;
     }
 
     await consumeSseStream(res, { filterKey: r.key });
 
+    const updated = roundsRef.current
+      .flatMap((round) => round.responses)
+      .find((row) => row.key === r.key);
+    const mk = modelKeyOf(r.provider, r.model);
+    if (
+      updated &&
+      updated.status === "done" &&
+      !updated.error &&
+      updated.content.trim()
+    ) {
+      setContinueByModelKey((prev) => ({ ...prev, [mk]: true }));
+      setUseInSynthesisByKey((prev) => ({ ...prev, [r.key]: true }));
+    } else {
+      setContinueByModelKey((prev) => ({ ...prev, [mk]: false }));
+      setUseInSynthesisByKey((prev) => ({ ...prev, [r.key]: false }));
+    }
+
     // Persistence happens server-side in the stream. We don't auto-score
     // (Session 11) so there's no follow-up call here. If the user wants
     // scores after a retry, they'll click "Grade answer" on the card.
     setRetryingKey(null);
-    setPhase("done");
   }
 
   function updateCard(key: string, patch: Partial<ResponseState>) {
@@ -1326,6 +1369,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Synthesis failed");
+      if (data.synthesis_id) setLatestSynthesisId(data.synthesis_id as string);
       router.push(`/synthesis/${data.synthesis_id}`);
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Synthesis failed");
@@ -1458,7 +1502,8 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   const hasAnyPending = flatResponses.some(
     (r) => r.status === "pending" || r.status === "streaming"
   );
-  const canStopWaiting = phase === "streaming" && hasAnyPending && hasAnySettled;
+  const canStopWaiting =
+    mainBatchStreaming && hasAnyPending && hasAnySettled;
 
   // ─── Per-model derived state (Session 11) ───────────────────────────────
   //
@@ -1544,6 +1589,34 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     <div className="space-y-6 max-w-7xl">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold">Compare</h1>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {latestSynthesisId && (
+            <Button asChild variant="default" size="sm" className="gap-1.5">
+              <Link href={`/synthesis/${latestSynthesisId}`}>
+                <Sparkles className="h-3.5 w-3.5" />
+                View latest synthesis
+              </Link>
+            </Button>
+          )}
+          {selectedProjectId ? (
+            <Button asChild variant="outline" size="sm" className="gap-1.5">
+              <Link
+                href={`/projects/${selectedProjectId}/syntheses`}
+                className="inline-flex items-center gap-1.5"
+              >
+                Synthesis history
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+            </Button>
+          ) : (
+            <Button asChild variant="outline" size="sm" className="gap-1.5">
+              <Link href="/projects" className="inline-flex items-center gap-1.5">
+                Projects & synthesis history
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+            </Button>
+          )}
+        </div>
       </div>
 
       {showRestoreBanner && (
@@ -1776,7 +1849,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                       status={
                         retryingKey === r.key
                           ? "streaming"
-                          : r.status === "pending" && phase === "streaming"
+                          : r.status === "pending" &&
+                              (mainBatchStreaming ||
+                                followUpInFlight ||
+                                askingModelKey === mk)
                             ? "pending"
                             : r.status
                       }
@@ -1835,9 +1911,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                           ? {
                               onSubmit: (text) =>
                                 askThisModel(r.provider, r.model, text),
-                              isStreaming:
-                                askingModelKey === mk &&
-                                phase === "streaming",
+                              isStreaming: askingModelKey === mk,
                             }
                           : undefined
                       }
@@ -1925,9 +1999,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
           )}
 
           {/* ── Main follow-up ─────────────────────────────────────────────
-              Visible as soon as we have a conversation. The button is
-              disabled while phase === "streaming" so a new round can't
-              race position assignment with the in-flight one. */}
+              Server allocates positions with compare_alloc_next_round (migration 029)
+              so this can run while the initial compare is still streaming.
+              Double-submit is prevented with followUpInFlight. */}
           {hasAnySettled && !retryingKey && conversationId && (
             <div className="space-y-3 border-t pt-6">
               <p className="text-xs font-medium text-muted-foreground">
@@ -1948,13 +2022,13 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                 disabled={
                   !followUpPrompt.trim() ||
                   continueCount === 0 ||
-                  phase === "streaming" ||
+                  followUpInFlight ||
                   !!retryingKey
                 }
               >
                 <Zap className="h-4 w-4" />
-                {phase === "streaming"
-                  ? "Waiting for current round…"
+                {followUpInFlight
+                  ? "Sending follow-up…"
                   : `Send follow-up to ${continueCount} active model${
                       continueCount === 1 ? "" : "s"
                     }`}
@@ -1966,10 +2040,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                   model” on a card for a single-model follow-up.
                 </p>
               )}
-              {phase === "streaming" && hasAnyPending && (
+              {mainBatchStreaming && hasAnyPending && (
                 <p className="text-xs text-muted-foreground">
                   Some models are still responding. Wait for them, or
-                  click <strong>Stop waiting on slow models</strong> below
+                  click <strong>Stop waiting on slow models</strong> above
                   to skip stragglers and continue.
                 </p>
               )}

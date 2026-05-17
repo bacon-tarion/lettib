@@ -83,6 +83,7 @@ pnpm --filter @workspace/lettib run lint       # ESLint
 - Compare via workspace proxy (`localhost:80`) may return 502 on first cold compile due to proxy timeout. Use `localhost:$PORT` directly for testing.
 - Migration 008 must run before Compare works — needs `model_responses`, `syntheses`, and `conversations.mode` column.
 - Migration 028 must run before Compare Workspace v2 works — adds `model_responses.round_kind`. Without it, "Ask this model" inserts will fail with an unknown-column error.
+- Migration 029 (`compare_alloc_next_round`) must run so concurrent follow-up / "Ask this model" requests cannot grab the same `model_responses.position` range. Without it, `/api/compare` returns 500 on follow-ups after deploy until the migration is applied.
 
 ## Pointers
 
