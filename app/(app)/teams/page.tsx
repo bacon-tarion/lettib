@@ -11,15 +11,14 @@ export const dynamic = "force-dynamic";
 
 export default async function TeamsPage() {
   const [rawConnections] = await Promise.all([listApiKeys()]);
+  const activeConnections = rawConnections.filter(
+    (c) => c.status === "connected" || c.status === "untested"
+  );
   const connections = withBuiltinGroqConnections(
-    rawConnections
+    activeConnections
   ) as ApiConnection[];
 
-  const vaultConnectedCount = connections.filter(
-    (c) => c.status === "connected" || c.status === "untested"
-  ).length;
-  const effectiveProviderCount =
-    vaultConnectedCount + (isGroqBuiltinEnabled() ? 1 : 0);
+  const effectiveProviderCount = connections.length;
 
   let teams = await listTeams();
 
