@@ -2,10 +2,6 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import {
-  isGroqBuiltinEnabled,
-  withBuiltinGroqConnections,
-} from "@/lib/builtin-providers";
 import { listTeams } from "@/app/(app)/teams/actions";
 import { CompareUI } from "@/components/compare/compare-ui";
 
@@ -45,9 +41,7 @@ export default async function ComparePage() {
     listTeams(),
   ]);
 
-  const connectionList = withBuiltinGroqConnections(
-    (connections ?? []) as CompareConnection[]
-  );
+  const connectionList = (connections ?? []) as CompareConnection[];
 
   return (
     <Suspense
@@ -60,7 +54,6 @@ export default async function ComparePage() {
       <CompareUI
         projects={(projects ?? []) as CompareProject[]}
         connections={connectionList}
-        builtinGroqAvailable={isGroqBuiltinEnabled()}
         teams={teams}
       />
     </Suspense>

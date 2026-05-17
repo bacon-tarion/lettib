@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { isGroqBuiltinEnabled } from "@/lib/builtin-providers";
 import { listApiKeys, getUsageAlertThresholdCents } from "./actions";
 import { SettingsContent } from "./settings-content";
 
@@ -29,7 +28,6 @@ export default async function SettingsPage() {
       initialConnections={connections}
       userEmail={userEmail}
       userName={userName}
-      groqBuiltinConfigured={isGroqBuiltinEnabled()}
       initialUsageAlertThresholdCents={thresholdCents}
     />
   );

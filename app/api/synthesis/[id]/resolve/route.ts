@@ -169,7 +169,7 @@ export async function POST(
     error: string | null;
   }[]).filter((r) => !r.error && r.content?.trim());
 
-  // Resolve API key (paid → fallback to free env key for groq/google)
+  // Resolve API key (Vault → fallback to free env key for google)
   let apiKey: string | null = null;
   let baseUrl: string | null = null;
   const { data: conn } = await sb

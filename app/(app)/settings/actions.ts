@@ -19,7 +19,14 @@ export type ApiConnection = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const VALID_PROVIDERS = ["openai", "anthropic", "google", "xai", "custom"] as const;
+const VALID_PROVIDERS = [
+  "openai",
+  "anthropic",
+  "google",
+  "groq",
+  "xai",
+  "custom",
+] as const;
 type ProviderValue = (typeof VALID_PROVIDERS)[number];
 
 async function requireUser() {
@@ -48,6 +55,10 @@ function validateKey(
     case "google":
       if (rawKey.length < 20)
         return "Google API keys must be at least 20 characters.";
+      break;
+    case "groq":
+      if (!rawKey.startsWith("gsk_") || rawKey.length < 20)
+        return 'Groq keys must start with "gsk_" and be at least 20 characters.';
       break;
     case "xai":
       if (!rawKey.startsWith("xai-") || rawKey.length < 20)
@@ -223,6 +234,14 @@ export async function testApiKey(
         );
         testOk = res.ok;
         if (!testOk) testError = `Google returned ${res.status}`;
+        break;
+      }
+      case "groq": {
+        const res = await fetch("https://api.groq.com/openai/v1/models", {
+          headers: { Authorization: `Bearer ${rawKey}` },
+        });
+        testOk = res.ok;
+        if (!testOk) testError = `Groq returned ${res.status}`;
         break;
       }
       case "xai": {

@@ -183,7 +183,7 @@ export async function POST(req: NextRequest) {
 
   // 4. Find a usable scorer key — same logic as the legacy save path: try
   //    each response's provider until we find a stored Vault key or a
-  //    server-side fallback (Groq/Google free tier).
+  //    server-side fallback (Google free tier).
   let scorerProvider: string | null = null;
   let scorerModel: string | null = null;
   let apiKey: string | null = null;

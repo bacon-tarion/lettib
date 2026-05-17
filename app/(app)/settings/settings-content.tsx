@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiKeyTile } from "@/components/settings/api-key-tile";
-import { BuiltInProviderTile } from "@/components/settings/built-in-provider-tile";
 import type { ApiConnection } from "./actions";
 import { updateUsageAlertThresholdCents } from "./actions";
 import { PRICING_USD } from "@/lib/pricing";
@@ -48,6 +47,13 @@ const PROVIDERS: {
     consoleUrl: "https://aistudio.google.com/apikey",
   },
   {
+    id: "groq",
+    label: "Groq",
+    color: "bg-fuchsia-600",
+    initial: "Q",
+    consoleUrl: "https://console.groq.com/keys",
+  },
+  {
     id: "xai",
     label: "xAI (Grok)",
     color: "bg-violet-600",
@@ -63,15 +69,10 @@ const PROVIDERS: {
   },
 ];
 
-/** Console URL for the built-in Groq tile (no per-user key, but users can BYOK). */
-const GROQ_CONSOLE_URL = "https://console.groq.com/keys";
-
 interface SettingsContentProps {
   initialConnections: ApiConnection[];
   userEmail: string;
   userName: string;
-  /** Server has GROQ_API_KEY — built-in Groq models work without a user key */
-  groqBuiltinConfigured: boolean;
   /** Per-user 30-day spend-alert step in cents (default 1000 = $10). */
   initialUsageAlertThresholdCents: number;
 }
@@ -80,7 +81,6 @@ export function SettingsContent({
   initialConnections,
   userEmail,
   userName,
-  groqBuiltinConfigured,
   initialUsageAlertThresholdCents,
 }: SettingsContentProps) {
   const router = useRouter();
@@ -152,30 +152,7 @@ export function SettingsContent({
         {/* ── API Keys ── */}
         <TabsContent value="api-keys" className="mt-4 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {PROVIDERS.slice(0, 3).map((p) => {
-              const connection =
-                connections.find((c) => c.provider === p.id) ?? null;
-              return (
-                <ApiKeyTile
-                  key={p.id}
-                  provider={p.id}
-                  label={p.label}
-                  color={p.color}
-                  initial={p.initial}
-                  connection={connection}
-                  consoleUrl={p.consoleUrl}
-                  onUpdate={refresh}
-                />
-              );
-            })}
-            <BuiltInProviderTile
-              label="Groq"
-              initial="Q"
-              color="bg-fuchsia-600"
-              configured={groqBuiltinConfigured}
-              consoleUrl={GROQ_CONSOLE_URL}
-            />
-            {PROVIDERS.slice(3).map((p) => {
+            {PROVIDERS.map((p) => {
               const connection =
                 connections.find((c) => c.provider === p.id) ?? null;
               return (
@@ -198,8 +175,7 @@ export function SettingsContent({
             <p>
               Your API keys are encrypted and stored securely using Supabase
               Vault. They are never transmitted to your browser after saving.
-              LettiB uses them only to make requests on your behalf. Groq
-              (built-in) uses the host&apos;s server key instead of Vault.
+              LettiB uses them only to make requests on your behalf.
             </p>
           </div>
         </TabsContent>

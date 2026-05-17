@@ -1,9 +1,5 @@
 import { listTeams, generateStarterTeams } from "./actions";
 import { listApiKeys } from "@/app/(app)/settings/actions";
-import {
-  isGroqBuiltinEnabled,
-  withBuiltinGroqConnections,
-} from "@/lib/builtin-providers";
 import type { ApiConnection } from "@/app/(app)/settings/actions";
 import { TeamsGrid } from "@/components/teams/teams-grid";
 
@@ -14,10 +10,7 @@ export default async function TeamsPage() {
   const activeConnections = rawConnections.filter(
     (c) => c.status === "connected" || c.status === "untested"
   );
-  const connections = withBuiltinGroqConnections(
-    activeConnections
-  ) as ApiConnection[];
-
+  const connections = activeConnections as ApiConnection[];
   const effectiveProviderCount = connections.length;
 
   let teams = await listTeams();
@@ -29,10 +22,6 @@ export default async function TeamsPage() {
   }
 
   return (
-    <TeamsGrid
-      initialTeams={teams}
-      connectedProviders={connections}
-      builtinGroqAvailable={isGroqBuiltinEnabled()}
-    />
+    <TeamsGrid initialTeams={teams} connectedProviders={connections} />
   );
 }

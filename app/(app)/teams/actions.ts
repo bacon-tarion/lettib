@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import { isGroqBuiltinEnabled } from "@/lib/builtin-providers";
 import { MODELS_CATALOG, DEFAULT_TEAM_MODELS } from "@/lib/providers/models";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -83,8 +82,6 @@ export async function createTeam(
       connectedProviders.add(c.provider as string);
     }
   }
-  if (isGroqBuiltinEnabled()) connectedProviders.add("groq");
-
   for (const member of input.members) {
     if (!connectedProviders.has(member.provider)) {
       return {
@@ -162,7 +159,6 @@ export async function updateTeam(
       connectedProviders.add(c.provider as string);
     }
   }
-  if (isGroqBuiltinEnabled()) connectedProviders.add("groq");
   for (const member of input.members) {
     if (!connectedProviders.has(member.provider)) {
       return {
@@ -284,8 +280,6 @@ export async function generateStarterTeams(): Promise<{
       .filter((c) => c.status === "connected" || c.status === "untested")
       .map((c) => c.provider)
   );
-  if (isGroqBuiltinEnabled()) connectedProviders.add("groq");
-
   if (connectedProviders.size < 2) {
     return { error: "Connect at least 2 providers first" };
   }

@@ -39,10 +39,9 @@ export type StreamChatInput = {
  * Returns null if the provider is not free or no env key is set.
  *
  * Used as a fallback when the user has not connected their own key for
- * `groq` or `google`. All other providers always require a user key.
+ * `google`. All other providers always require a user key.
  */
 export function getServerApiKey(provider: string): string | null {
-  if (provider === "groq") return process.env.GROQ_API_KEY ?? null;
   if (provider === "google") return process.env.GOOGLE_API_KEY ?? null;
   return null;
 }

@@ -10,7 +10,7 @@ export const PRICING_USD = {
   lifetimeByok: 79,
 } as const;
 
-/** Max models in one Compare (5 BYOK providers + built-in Groq). */
+/** Max models in one Compare (BYOK providers). */
 export const COMPARE_MODELS_BY_PLAN = {
   free: 2,
   pro: 4,

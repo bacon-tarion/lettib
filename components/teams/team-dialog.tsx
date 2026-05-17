@@ -37,8 +37,6 @@ interface TeamDialogProps {
   open: boolean;
   team?: Team | null;
   connectedProviders: ApiConnection[];
-  /** Host provides GROQ_API_KEY — show Groq models without a user Vault key */
-  builtinGroqAvailable?: boolean;
   onSave: () => void;
   onCancel: () => void;
 }
@@ -55,7 +53,6 @@ export function TeamDialog({
   open,
   team,
   connectedProviders,
-  builtinGroqAvailable = false,
   onSave,
   onCancel,
 }: TeamDialogProps) {
@@ -81,27 +78,13 @@ export function TeamDialog({
     }
   }, [open, team]);
 
-  /** Active Vault rows plus built-in Groq when the host has GROQ_API_KEY (no api_connections row). */
-  const pickerConnections = useMemo(() => {
-    const active = connectedProviders.filter(
-      (c) => c.status === "connected" || c.status === "untested"
-    );
-    if (builtinGroqAvailable && !active.some((c) => c.provider === "groq")) {
-      return [
-        ...active,
-        {
-          id: "builtin-groq",
-          provider: "groq",
-          status: "connected",
-          key_last_four: null,
-          last_tested_at: null,
-          custom_base_url: null,
-          custom_model_name: null,
-        } satisfies ApiConnection,
-      ];
-    }
-    return active;
-  }, [connectedProviders, builtinGroqAvailable]);
+  const pickerConnections = useMemo(
+    () =>
+      connectedProviders.filter(
+        (c) => c.status === "connected" || c.status === "untested"
+      ),
+    [connectedProviders]
+  );
 
   const providerGroups = useMemo((): ProviderGroup[] => {
     const catalog = MODELS_CATALOG as Record<
@@ -109,12 +92,13 @@ export function TeamDialog({
       readonly { id: string; name: string }[]
     >;
     const seenProviders = new Set<string>();
-    const groups = pickerConnections
+    return pickerConnections
       .map((conn): ProviderGroup | null => {
-        if (seenProviders.has(conn.provider)) return null;
-        seenProviders.add(conn.provider);
+        const providerKey = conn.provider.toLowerCase();
+        if (seenProviders.has(providerKey)) return null;
+        seenProviders.add(providerKey);
 
-        if (conn.provider === "custom") {
+        if (providerKey === "custom") {
           return {
             provider: "custom",
             label: getProviderLabel("custom"),
@@ -124,33 +108,18 @@ export function TeamDialog({
           };
         }
 
-        const models = (catalog[conn.provider] ?? []).map((m) => ({
+        const models = (catalog[providerKey] ?? []).map((m) => ({
           modelId: m.id,
           modelName: m.name,
         }));
         return {
-          provider: conn.provider,
-          label: getProviderLabel(conn.provider),
+          provider: providerKey,
+          label: getProviderLabel(providerKey),
           models,
         };
       })
       .filter((g): g is ProviderGroup => g !== null && g.models.length > 0);
-
-    if (builtinGroqAvailable && !groups.some((g) => g.provider === "groq")) {
-      const groqModels = (catalog.groq ?? []).map((m) => ({
-        modelId: m.id,
-        modelName: m.name,
-      }));
-      if (groqModels.length > 0) {
-        return [
-          ...groups,
-          { provider: "groq", label: getProviderLabel("groq"), models: groqModels },
-        ];
-      }
-    }
-
-    return groups;
-  }, [pickerConnections, builtinGroqAvailable]);
+  }, [pickerConnections]);
 
   function toggleModel(provider: string, modelId: string) {
     setSelectedModels((prev) => {
@@ -227,7 +196,7 @@ export function TeamDialog({
               <span className="text-muted-foreground font-normal">(select at least 2)</span>
             </Label>
 
-            {providerGroups.length === 0 && !builtinGroqAvailable && (
+            {providerGroups.length === 0 && (
               <p className="text-sm text-muted-foreground">
                 No connected providers found. Add API keys in Settings first.
               </p>
