@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -81,49 +81,76 @@ export function TeamDialog({
     }
   }, [open, team]);
 
-  const catalog = MODELS_CATALOG as Record<string, readonly { id: string; name: string }[]>;
+  /** Active Vault rows plus built-in Groq when the host has GROQ_API_KEY (no api_connections row). */
+  const pickerConnections = useMemo(() => {
+    const active = connectedProviders.filter(
+      (c) => c.status === "connected" || c.status === "untested"
+    );
+    if (builtinGroqAvailable && !active.some((c) => c.provider === "groq")) {
+      return [
+        ...active,
+        {
+          id: "builtin-groq",
+          provider: "groq",
+          status: "connected",
+          key_last_four: null,
+          last_tested_at: null,
+          custom_base_url: null,
+          custom_model_name: null,
+        } satisfies ApiConnection,
+      ];
+    }
+    return active;
+  }, [connectedProviders, builtinGroqAvailable]);
 
-  const activeConnections = connectedProviders.filter(
-    (c) => c.status === "connected" || c.status === "untested"
-  );
+  const providerGroups = useMemo((): ProviderGroup[] => {
+    const catalog = MODELS_CATALOG as Record<
+      string,
+      readonly { id: string; name: string }[]
+    >;
+    const seenProviders = new Set<string>();
+    const groups = pickerConnections
+      .map((conn): ProviderGroup | null => {
+        if (seenProviders.has(conn.provider)) return null;
+        seenProviders.add(conn.provider);
 
-  const seenProviders = new Set<string>();
-  let providerGroups: ProviderGroup[] = activeConnections
-    .map((conn): ProviderGroup | null => {
-      if (seenProviders.has(conn.provider)) return null;
-      seenProviders.add(conn.provider);
+        if (conn.provider === "custom") {
+          return {
+            provider: "custom",
+            label: getProviderLabel("custom"),
+            models: [
+              { modelId: "custom", modelName: conn.custom_model_name ?? "Custom Model" },
+            ],
+          };
+        }
 
-      if (conn.provider === "custom") {
+        const models = (catalog[conn.provider] ?? []).map((m) => ({
+          modelId: m.id,
+          modelName: m.name,
+        }));
         return {
-          provider: "custom",
-          label: getProviderLabel("custom"),
-          models: [{ modelId: "custom", modelName: conn.custom_model_name ?? "Custom Model" }],
+          provider: conn.provider,
+          label: getProviderLabel(conn.provider),
+          models,
         };
-      }
+      })
+      .filter((g): g is ProviderGroup => g !== null && g.models.length > 0);
 
-      const models = (catalog[conn.provider] ?? []).map((m) => ({
+    if (builtinGroqAvailable && !groups.some((g) => g.provider === "groq")) {
+      const groqModels = (catalog.groq ?? []).map((m) => ({
         modelId: m.id,
         modelName: m.name,
       }));
-      return { provider: conn.provider, label: getProviderLabel(conn.provider), models };
-    })
-    .filter((g): g is ProviderGroup => g !== null && g.models.length > 0);
-
-  if (
-    builtinGroqAvailable &&
-    !providerGroups.some((g) => g.provider === "groq")
-  ) {
-    const models = (catalog.groq ?? []).map((m) => ({
-      modelId: m.id,
-      modelName: m.name,
-    }));
-    if (models.length > 0) {
-      providerGroups = [
-        ...providerGroups,
-        { provider: "groq", label: getProviderLabel("groq"), models },
-      ];
+      if (groqModels.length > 0) {
+        return [
+          ...groups,
+          { provider: "groq", label: getProviderLabel("groq"), models: groqModels },
+        ];
+      }
     }
-  }
+
+    return groups;
+  }, [pickerConnections, builtinGroqAvailable]);
 
   function toggleModel(provider: string, modelId: string) {
     setSelectedModels((prev) => {
@@ -200,7 +227,7 @@ export function TeamDialog({
               <span className="text-muted-foreground font-normal">(select at least 2)</span>
             </Label>
 
-            {providerGroups.length === 0 && (
+            {providerGroups.length === 0 && !builtinGroqAvailable && (
               <p className="text-sm text-muted-foreground">
                 No connected providers found. Add API keys in Settings first.
               </p>

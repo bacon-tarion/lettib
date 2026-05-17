@@ -1,12 +1,19 @@
 import { listTeams, generateStarterTeams } from "./actions";
 import { listApiKeys } from "@/app/(app)/settings/actions";
-import { isGroqBuiltinEnabled } from "@/lib/builtin-providers";
+import {
+  isGroqBuiltinEnabled,
+  withBuiltinGroqConnections,
+} from "@/lib/builtin-providers";
+import type { ApiConnection } from "@/app/(app)/settings/actions";
 import { TeamsGrid } from "@/components/teams/teams-grid";
 
 export const dynamic = "force-dynamic";
 
 export default async function TeamsPage() {
-  const [connections] = await Promise.all([listApiKeys()]);
+  const [rawConnections] = await Promise.all([listApiKeys()]);
+  const connections = withBuiltinGroqConnections(
+    rawConnections
+  ) as ApiConnection[];
 
   const vaultConnectedCount = connections.filter(
     (c) => c.status === "connected" || c.status === "untested"

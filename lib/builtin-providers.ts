@@ -12,8 +12,11 @@ export function isGroqBuiltinEnabled(): boolean {
 /** Synthetic api_connections row for built-in Groq (no Vault key). */
 export function syntheticGroqConnection() {
   return {
+    id: "builtin-groq",
     provider: "groq" as const,
     status: "connected" as const,
+    key_last_four: null,
+    last_tested_at: null,
     custom_base_url: null,
     custom_model_name: null,
   };
