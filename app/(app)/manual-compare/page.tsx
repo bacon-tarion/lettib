@@ -21,13 +21,19 @@ import {
 } from "@/lib/session/keys";
 
 const SOURCE_OPTIONS = [
-  "ChatGPT",
-  "Claude",
-  "Gemini",
-  "Grok",
-  "Perplexity",
-  "Custom",
+  { value: "ChatGPT", label: "ChatGPT" },
+  { value: "Claude", label: "Claude" },
+  { value: "Gemini", label: "Gemini" },
+  { value: "Grok", label: "Grok" },
+  { value: "Groq", label: "Groq" },
+  {
+    value: "Perplexity",
+    label: "Perplexity — paste only (no API connection)",
+  },
+  { value: "Custom", label: "Custom" },
 ] as const;
+
+type SourceValue = (typeof SOURCE_OPTIONS)[number]["value"];
 
 const TONE_OPTIONS = [
   "professional",
@@ -39,7 +45,7 @@ const TONE_OPTIONS = [
 
 interface PasteBox {
   id: string;
-  source: (typeof SOURCE_OPTIONS)[number];
+  source: SourceValue;
   customName: string;
   content: string;
 }
@@ -48,7 +54,7 @@ const MAX_BOXES = 6;
 const MIN_BOXES = 2;
 
 let boxIdCounter = 0;
-function newBox(source: (typeof SOURCE_OPTIONS)[number] = "ChatGPT"): PasteBox {
+function newBox(source: SourceValue = "ChatGPT"): PasteBox {
   boxIdCounter += 1;
   return {
     id: `box-${Date.now()}-${boxIdCounter}`,
@@ -191,8 +197,8 @@ export default function ManualComparePage() {
         <h1 className="text-3xl font-bold tracking-tight">Manual Compare</h1>
         <p className="text-muted-foreground">
           Paste outputs from any assistant. Synthesis runs through your connected
-          API that matches the source you pick (e.g. Claude → Anthropic, ChatGPT
-          → OpenAI).
+          API that matches the source you pick (e.g. Claude → Anthropic, Groq →
+          Groq). Perplexity is paste-only — no API connection in Settings.
         </p>
       </div>
 
@@ -243,7 +249,7 @@ export default function ManualComparePage() {
                     value={box.source}
                     onValueChange={(v) =>
                       patchBox(box.id, {
-                        source: v as (typeof SOURCE_OPTIONS)[number],
+                        source: v as SourceValue,
                       })
                     }
                   >
@@ -252,8 +258,8 @@ export default function ManualComparePage() {
                     </SelectTrigger>
                     <SelectContent>
                       {SOURCE_OPTIONS.map((s) => (
-                        <SelectItem key={s} value={s}>
-                          {s}
+                        <SelectItem key={s.value} value={s.value}>
+                          {s.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -296,7 +302,8 @@ export default function ManualComparePage() {
               placeholder={`Paste the ${
                 box.source === "Custom"
                   ? box.customName || "Custom"
-                  : box.source
+                  : SOURCE_OPTIONS.find((s) => s.value === box.source)?.label ??
+                    box.source
               } response here…`}
               className="min-h-[180px] font-mono text-sm"
             />

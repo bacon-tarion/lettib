@@ -4,6 +4,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createXai } from "@ai-sdk/xai";
+import { createGroq } from "@ai-sdk/groq";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers/models";
@@ -25,12 +26,13 @@ interface ManualResponseInput {
 /** Map paste "Source" labels to API providers (only these may be used for synthesis). */
 const SOURCE_TO_API_PROVIDER: Record<
   string,
-  "openai" | "anthropic" | "google" | "xai" | undefined
+  "openai" | "anthropic" | "google" | "xai" | "groq" | undefined
 > = {
   ChatGPT: "openai",
   Claude: "anthropic",
   Gemini: "google",
   Grok: "xai",
+  Groq: "groq",
   Perplexity: undefined,
   Custom: undefined,
 };
@@ -40,6 +42,7 @@ const SOURCE_TO_SLUG: Record<string, string> = {
   Claude: "claude",
   Gemini: "gemini",
   Grok: "grok",
+  Groq: "groq",
   Perplexity: "perplexity",
 };
 
@@ -71,10 +74,7 @@ type ConnRow = {
   custom_model_name: string | null;
 };
 
-/**
- * Unique API providers implied by the user's source labels, in first-appearance order.
- * Excludes groq — Manual Compare never uses host Groq env keys.
- */
+/** Unique API providers implied by the user's source labels, in first-appearance order. */
 function preferredApiProvidersFromResponses(
   responses: ManualResponseInput[]
 ): string[] {
@@ -105,6 +105,8 @@ async function buildModelInstance(
       return createGoogleGenerativeAI({ apiKey })(model);
     case "xai":
       return createXai({ apiKey })(model);
+    case "groq":
+      return createGroq({ apiKey })(model);
     case "custom":
       if (!baseUrl) throw new Error("baseUrl required for custom provider");
       return createOpenAI({ apiKey, baseURL: baseUrl })(model);
@@ -214,7 +216,6 @@ export async function POST(req: NextRequest) {
 
   const connByProvider = new Map<string, ConnRow>();
   for (const c of (connections ?? []) as ConnRow[]) {
-    if (c.provider === "groq") continue;
     connByProvider.set(c.provider, c);
   }
 
@@ -223,7 +224,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "Label at least one pasted response as ChatGPT, Claude, Gemini, or Grok so we can use your matching API connection for synthesis (Custom / Perplexity alone cannot pick a provider).",
+          "Label at least one pasted response as ChatGPT, Claude, Gemini, Grok, or Groq so we can use your matching API connection for synthesis (Custom / Perplexity alone cannot pick a provider).",
       },
       { status: 400 }
     );
@@ -251,7 +252,9 @@ export async function POST(req: NextRequest) {
               ? "Google (Gemini)"
               : p === "xai"
                 ? "xAI (Grok)"
-                : p
+                : p === "groq"
+                  ? "Groq"
+                  : p
       )
       .join(", ");
     return NextResponse.json(

@@ -20,9 +20,11 @@ export const MODELS_CATALOG = {
     { id: 'grok-4',   name: 'Grok 4',   context: 256000, cost_in: 3.00, cost_out: 15.00, free: false },
   ],
   groq: [
-    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B (Groq)',  context: 131072, cost_in: 0, cost_out: 0, free: true },
-    { id: 'llama-3.1-70b-versatile', name: 'Llama 3.1 70B (Groq)',  context: 131072, cost_in: 0, cost_out: 0, free: true },
-    { id: 'mixtral-8x7b-32768',      name: 'Mixtral 8x7B (Groq)',   context: 32768,  cost_in: 0, cost_out: 0, free: true },
+    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B (Groq)', context: 131072, cost_in: 0, cost_out: 0, free: true },
+    { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant (Groq)', context: 131072, cost_in: 0, cost_out: 0, free: true },
+    { id: 'gemma2-9b-it', name: 'Gemma 2 9B (Groq)', context: 8192, cost_in: 0, cost_out: 0, free: true },
+    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B (Groq)', context: 131072, cost_in: 0, cost_out: 0, free: true },
+    { id: 'meta-llama/llama-4-maverick-17b-128e-instruct', name: 'Llama 4 Maverick 17B (Groq)', context: 131072, cost_in: 0, cost_out: 0, free: true },
   ],
   custom: [
     { id: 'custom', name: 'Custom Model', context: 128000, cost_in: 0, cost_out: 0, free: false },
