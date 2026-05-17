@@ -326,6 +326,10 @@ export async function POST(req: NextRequest) {
   /** Session 11: 'main' for initial/follow-up rounds, 'branch' for ask-this-model. */
   let insertRoundKind: "main" | "branch" = "main";
 
+  /** Retry path captures the existing row's id here; pre-insert below
+   *  populates this for the other paths. */
+  const retryRowId = { current: null as string | null };
+
   if (isRetry) {
     const { data: conv, error: convErr } = await serviceClient
       .from("conversations")
@@ -361,6 +365,7 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    retryRowId.current = row?.id ?? null;
   } else if (isFollowUp || isAskModel) {
     const { data: conv, error: convErr } = await serviceClient
       .from("conversations")
@@ -456,6 +461,61 @@ export async function POST(req: NextRequest) {
     insertRoundIndex = 0;
   }
 
+  /**
+   * Session 12: pre-reserve every position for this round at DB-write
+   * time, BEFORE we open the SSE stream. Two reasons:
+   *
+   *   1. If the client cancels (e.g. clicks "Stop waiting on slow
+   *      models") and immediately starts a follow-up, the follow-up's
+   *      `max(position)` lookup still sees these placeholder rows. The
+   *      follow-up therefore picks a startPos above them and stragglers
+   *      from the cancelled round can write back into their reserved
+   *      slots without ever colliding with the new round's positions.
+   *   2. The client receives a `saved` event with the row id as soon as
+   *      each lane settles, so synthesis / grading / follow-ups don't
+   *      have to wait for the whole stream to close.
+   *
+   * Retry path: the row already exists (it's what we're retrying), so
+   * we just look up its id.
+   */
+  const idByPosition = new Map<number, string>();
+
+  if (isRetry) {
+    if (retryRowId.current) {
+      idByPosition.set(positions[0]!, retryRowId.current);
+    }
+  } else {
+    const placeholderRows = modelIds.map((spec, i) => ({
+      conversation_id: conversationId,
+      provider: spec.provider,
+      model: spec.model,
+      content: "",
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_usd: 0,
+      latency_ms: 0,
+      error: null,
+      position: positions[i]!,
+      round_index: insertRoundIndex,
+      round_kind: insertRoundKind,
+    }));
+    const { data: inserted, error: insertErr } = await serviceClient
+      .from("model_responses")
+      .insert(placeholderRows)
+      .select("id, position");
+    if (insertErr || !inserted) {
+      return new Response(
+        JSON.stringify({
+          error: `Failed to reserve response slots: ${insertErr?.message ?? "unknown"}`,
+        }),
+        { status: 500 }
+      );
+    }
+    for (const row of inserted as { id: string; position: number }[]) {
+      idByPosition.set(row.position, row.id);
+    }
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -520,6 +580,58 @@ export async function POST(req: NextRequest) {
 
       const PER_MEMBER_TIMEOUT_MS = 300_000;
 
+      // Helper: persist + emit `saved` event so the client knows the row's
+      // id the moment a lane settles. Without this, the client must wait
+      // for the entire SSE stream to close (which waits on the slowest
+      // model) before /api/compare/save returns ids — and synthesis /
+      // follow-ups can't proceed without ids.
+      //
+      // Every row is pre-inserted above; this only ever updates.
+      const persistAndEmitSaved = async (
+        key: string,
+        _spec: ModelSpec,
+        position: number,
+        row: {
+          content: string;
+          tokens_in: number;
+          tokens_out: number;
+          cost_usd: number;
+          latency_ms: number;
+          error: string | null;
+        }
+      ) => {
+        const id = idByPosition.get(position) ?? null;
+        if (!id) {
+          // Should never happen — pre-insert covers every position. Skip
+          // gracefully rather than crash the stream.
+          return;
+        }
+        try {
+          await serviceClient
+            .from("model_responses")
+            .update({
+              content: row.content,
+              tokens_in: row.tokens_in,
+              tokens_out: row.tokens_out,
+              cost_usd: row.cost_usd,
+              latency_ms: row.latency_ms,
+              error: row.error,
+            })
+            .eq("id", id);
+        } catch {
+          // Persistence may fail (e.g., RLS, transient DB error). We
+          // already emitted the `done`/`error` event so the user sees the
+          // content / failure; just skip the `saved` event.
+          return;
+        }
+        enqueue({
+          type: "saved",
+          key,
+          response_id: id,
+          status: row.error ? "error" : "ok",
+        });
+      };
+
       const runOne = async (spec: ModelSpec, position: number) => {
         const key = `${spec.provider}::${spec.model}::${position}`;
         const startedAt = Date.now();
@@ -549,34 +661,15 @@ export async function POST(req: NextRequest) {
           );
           if (vaultError || !vaultKey) {
             const errMsg = "Could not decrypt API key.";
-            enqueue({
-              type: "error",
-              key,
+            enqueue({ type: "error", key, error: errMsg });
+            await persistAndEmitSaved(key, spec, position, {
+              content: "",
+              tokens_in: 0,
+              tokens_out: 0,
+              cost_usd: 0,
+              latency_ms: Date.now() - startedAt,
               error: errMsg,
             });
-            const latency_ms = Date.now() - startedAt;
-            if (isRetry) {
-              await serviceClient
-                .from("model_responses")
-                .update({ error: errMsg, latency_ms })
-                .eq("conversation_id", conversationId)
-                .eq("position", position);
-            } else {
-              await serviceClient.from("model_responses").insert({
-                conversation_id: conversationId,
-                provider: spec.provider,
-                model: spec.model,
-                content: "",
-                tokens_in: 0,
-                tokens_out: 0,
-                cost_usd: 0,
-                latency_ms,
-                error: errMsg,
-                position,
-                round_index: insertRoundIndex,
-                round_kind: insertRoundKind,
-              });
-            }
             return;
           }
           // Vault RPC may return whitespace; Anthropic/OpenAI reject untrimmed keys.
@@ -587,29 +680,14 @@ export async function POST(req: NextRequest) {
           if (!apiKey) {
             const errMsg = "API key from vault is empty after decrypt.";
             enqueue({ type: "error", key, error: errMsg });
-            const latency_ms = Date.now() - startedAt;
-            if (isRetry) {
-              await serviceClient
-                .from("model_responses")
-                .update({ error: errMsg, latency_ms })
-                .eq("conversation_id", conversationId)
-                .eq("position", position);
-            } else {
-              await serviceClient.from("model_responses").insert({
-                conversation_id: conversationId,
-                provider: spec.provider,
-                model: spec.model,
-                content: "",
-                tokens_in: 0,
-                tokens_out: 0,
-                cost_usd: 0,
-                latency_ms,
-                error: errMsg,
-                position,
-                round_index: insertRoundIndex,
-                round_kind: insertRoundKind,
-              });
-            }
+            await persistAndEmitSaved(key, spec, position, {
+              content: "",
+              tokens_in: 0,
+              tokens_out: 0,
+              cost_usd: 0,
+              latency_ms: Date.now() - startedAt,
+              error: errMsg,
+            });
             return;
           }
           baseUrl = conn.custom_base_url ?? null;
@@ -619,29 +697,14 @@ export async function POST(req: NextRequest) {
           if (!apiKey) {
             const msg = `${spec.provider} is not connected. Add a key in Settings.`;
             enqueue({ type: "error", key, error: msg });
-            const latency_ms = Date.now() - startedAt;
-            if (isRetry) {
-              await serviceClient
-                .from("model_responses")
-                .update({ error: msg, latency_ms })
-                .eq("conversation_id", conversationId)
-                .eq("position", position);
-            } else {
-              await serviceClient.from("model_responses").insert({
-                conversation_id: conversationId,
-                provider: spec.provider,
-                model: spec.model,
-                content: "",
-                tokens_in: 0,
-                tokens_out: 0,
-                cost_usd: 0,
-                latency_ms,
-                error: msg,
-                position,
-                round_index: insertRoundIndex,
-                round_kind: insertRoundKind,
-              });
-            }
+            await persistAndEmitSaved(key, spec, position, {
+              content: "",
+              tokens_in: 0,
+              tokens_out: 0,
+              cost_usd: 0,
+              latency_ms: Date.now() - startedAt,
+              error: msg,
+            });
             return;
           }
         }
@@ -690,35 +753,14 @@ export async function POST(req: NextRequest) {
             latency_ms,
           });
 
-          if (isRetry) {
-            await serviceClient
-              .from("model_responses")
-              .update({
-                content: accumulated,
-                tokens_in: tokensIn,
-                tokens_out: tokensOut,
-                cost_usd,
-                latency_ms,
-                error: null,
-              })
-              .eq("conversation_id", conversationId)
-              .eq("position", position);
-          } else {
-            await serviceClient.from("model_responses").insert({
-              conversation_id: conversationId,
-              provider: spec.provider,
-              model: spec.model,
-              content: accumulated,
-              tokens_in: tokensIn,
-              tokens_out: tokensOut,
-              cost_usd,
-              latency_ms,
-              error: null,
-              position,
-              round_index: insertRoundIndex,
-              round_kind: insertRoundKind,
-            });
-          }
+          await persistAndEmitSaved(key, spec, position, {
+            content: accumulated,
+            tokens_in: tokensIn,
+            tokens_out: tokensOut,
+            cost_usd,
+            latency_ms,
+            error: null,
+          });
 
           await serviceClient.from("usage_logs").insert({
             user_id: user.id,
@@ -738,33 +780,14 @@ export async function POST(req: NextRequest) {
         } catch (err) {
           const message = err instanceof Error ? err.message : "Stream failed";
           enqueue({ type: "error", key, error: message });
-          const latency_ms = Date.now() - startedAt;
-          if (isRetry) {
-            await serviceClient
-              .from("model_responses")
-              .update({
-                content: accumulated,
-                error: message,
-                latency_ms,
-              })
-              .eq("conversation_id", conversationId)
-              .eq("position", position);
-          } else {
-            await serviceClient.from("model_responses").insert({
-              conversation_id: conversationId,
-              provider: spec.provider,
-              model: spec.model,
-              content: accumulated,
-              tokens_in: 0,
-              tokens_out: 0,
-              cost_usd: 0,
-              latency_ms,
-              error: message,
-              position,
-              round_index: insertRoundIndex,
-              round_kind: insertRoundKind,
-            });
-          }
+          await persistAndEmitSaved(key, spec, position, {
+            content: accumulated,
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_usd: 0,
+            latency_ms: Date.now() - startedAt,
+            error: message,
+          });
         }
       };
 

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import {
   AlertCircle,
+  ExternalLink,
   Loader2,
   MessageSquare,
   RotateCcw,
@@ -85,6 +86,60 @@ export interface ResponseCardProps {
     onClick: () => void | Promise<void>;
     isGrading: boolean;
   };
+}
+
+/**
+ * Best-effort interpretation of a failed lane's error message. Returns a
+ * short user-facing hint or null if we don't recognize the pattern. The
+ * server uses a small set of canonical strings, so this stays simple.
+ */
+function providerHint(provider: string, error?: string | null): string | null {
+  if (!error) return null;
+  const e = error.toLowerCase();
+  const providerLabel: Record<string, string> = {
+    anthropic: "Anthropic",
+    openai: "OpenAI",
+    google: "Google Gemini",
+    xai: "xAI / Grok",
+    groq: "Groq",
+    custom: "your custom provider",
+  };
+  const label = providerLabel[provider] ?? provider;
+
+  if (
+    e.includes("not connected") ||
+    e.includes("add a key") ||
+    e.includes("decrypt") ||
+    e.includes("empty after decrypt")
+  ) {
+    return `Add or refresh your ${label} API key in`;
+  }
+  if (
+    e.includes("401") ||
+    e.includes("unauthorized") ||
+    e.includes("invalid_api_key") ||
+    e.includes("invalid api key") ||
+    e.includes("permission")
+  ) {
+    return `Your ${label} key was rejected. Re-paste it in`;
+  }
+  if (
+    e.includes("429") ||
+    e.includes("rate limit") ||
+    e.includes("rate_limit") ||
+    e.includes("quota")
+  ) {
+    return `${label} rate-limited the request. Wait a moment and click Retry, or check usage limits in`;
+  }
+  if (
+    e.includes("connect") ||
+    e.includes("network") ||
+    e.includes("etimedout") ||
+    e.includes("enotfound")
+  ) {
+    return `Couldn't reach ${label}. Check connectivity, then verify your key in`;
+  }
+  return null;
 }
 
 function ScoreChip({ label, value }: { label: string; value: number }) {
@@ -213,6 +268,27 @@ export function ResponseCard({
               <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
               <span className="leading-relaxed">{error || "Request failed"}</span>
             </div>
+            {/* Provider-aware hint — saves the user a debugging round-trip
+                when the failure looks like an auth / key / rate-limit
+                issue. We deliberately don't show this for generic timeout
+                errors since the fix there is "retry" or "stop waiting". */}
+            {providerHint(provider, error) && (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {providerHint(provider, error)}{" "}
+                <a
+                  href="/settings"
+                  className="underline underline-offset-2 inline-flex items-center gap-0.5"
+                >
+                  Settings
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              This lane has been removed from the next round and from
+              Synthesis. Click <strong>Retry model</strong> to bring it
+              back.
+            </p>
             {onRetry && (
               <Button
                 type="button"
@@ -222,7 +298,7 @@ export function ResponseCard({
                 onClick={onRetry}
               >
                 <RotateCcw className="h-3.5 w-3.5" />
-                Retry this model
+                Retry model
               </Button>
             )}
           </div>
@@ -271,7 +347,7 @@ export function ResponseCard({
                   checked={continueWithModel.checked}
                   onChange={(e) => continueWithModel.onChange(e.target.checked)}
                 />
-                <span className="text-foreground">Continue with this model</span>
+                <span className="text-foreground">Continue in next round</span>
               </label>
             )}
           </div>

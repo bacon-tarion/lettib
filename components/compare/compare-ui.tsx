@@ -26,10 +26,6 @@ import { estimateCompareCost, formatCostRange } from "@/lib/cost-estimate";
 import { MAX_COMPARE_PARALLEL_MODELS } from "@/lib/compare/constants";
 import type { Team } from "@/app/(app)/teams/actions";
 import {
-  compareToChatStorageKey,
-  type CompareToChatHandoff,
-} from "@/lib/compare/to-chat-handoff";
-import {
   readCompareSnapshotFromStorage,
   writeCompareSnapshotToStorage,
   clearCompareSnapshotStorage,
@@ -202,6 +198,15 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   const roundsRef = useRef<CompareRound[]>([]);
   const snapshotHydratedRef = useRef(false);
   const urlHydratedRef = useRef(false);
+  /**
+   * Controls the in-flight /api/compare fetch. Click "Stop waiting on
+   * slow models" → abort() → the SSE reader throws, the catch handler in
+   * `consumeSseStream` marks any lanes still pending/streaming as
+   * errored, and the workspace unlocks fully. Without this, lanes that
+   * silently hang (Gemini "failed to connect", Grok rate-limit) block
+   * synthesis / follow-up for the full 5-minute per-member timeout.
+   */
+  const abortRef = useRef<AbortController | null>(null);
 
   const flatResponses = useMemo(
     () => rounds.flatMap((x) => x.responses),
@@ -533,6 +538,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       opts: {
         onMeta?: (conversationId: string) => void;
         filterKey?: string | null;
+        /**
+         * Message to write into lanes that are still pending/streaming
+         * when the stream terminates (natural close, abort, or network
+         * drop). Defaults to "Stream ended unexpectedly".
+         */
+        abortedMessage?: string;
       }
     ) => {
       if (!res.body) return;
@@ -558,6 +569,17 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         }));
         roundsRef.current = next;
         setRounds(next);
+      };
+
+      // Look up a lane's modelKey (provider::model) without iterating —
+      // used by the `saved` / `error` handlers to flip selection state.
+      const findModelKey = (responseKey: string): string | null => {
+        for (const round of roundsRef.current) {
+          for (const r of round.responses) {
+            if (r.key === responseKey) return modelKeyOf(r.provider, r.model);
+          }
+        }
+        return null;
       };
 
       const handleEvent = (raw: string) => {
@@ -586,30 +608,77 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                 tokensOut: obj.tokens_out ?? 0,
                 latencyMs: obj.latency_ms,
               });
+              // Default a freshly-completed response into Synthesis.
+              // Don't overwrite an explicit user opt-out from a prior
+              // run (rare during streaming, but possible after a retry).
+              setUseInSynthesisByKey((prev) =>
+                prev[obj.key] === undefined
+                  ? { ...prev, [obj.key]: true }
+                  : prev
+              );
               break;
-            case "error":
+            case "saved":
+              // Server inserted/updated the model_responses row and is
+              // telling us its id. This is what unlocks per-lane
+              // synthesis without waiting for the whole stream to close.
+              if (typeof obj.response_id === "string") {
+                updateResponse(obj.key, {
+                  responseId: obj.response_id as string,
+                });
+              }
+              break;
+            case "error": {
               updateResponse(obj.key, {
                 status: "error",
                 error: obj.error || "Request failed",
               });
+              // Auto-disable Continue + Use in Synthesis for the failed
+              // lane. Spec: "failed models should not keep participating
+              // by default." The user can still flip them back on by
+              // clicking Retry model on the card.
+              const mk = findModelKey(obj.key);
+              if (mk) {
+                setContinueByModelKey((prev) => ({ ...prev, [mk]: false }));
+              }
+              setUseInSynthesisByKey((prev) => ({
+                ...prev,
+                [obj.key]: false,
+              }));
               break;
+            }
           }
         } catch {
           // ignore parse errors
         }
       };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split("\n\n");
-        buffer = events.pop() ?? "";
-        for (const ev of events) handleEvent(ev);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop() ?? "";
+          for (const ev of events) handleEvent(ev);
+        }
+        buffer += decoder.decode();
+        if (buffer.trim()) handleEvent(buffer);
+      } catch (err) {
+        // AbortError (user clicked "Stop waiting") or network drop. Fall
+        // through to the stuck-lane cleanup below — we treat both the
+        // same way: any lane still pending/streaming gets a clear error.
+        const aborted =
+          err instanceof DOMException && err.name === "AbortError";
+        if (!aborted) {
+          // Re-surface unexpected stream errors in the global error UI;
+          // don't swallow silently.
+          setGlobalError(
+            err instanceof Error ? err.message : "Stream interrupted"
+          );
+        }
       }
-      buffer += decoder.decode();
-      if (buffer.trim()) handleEvent(buffer);
 
+      const stuckErrorMessage = opts.abortedMessage ?? "Stream ended unexpectedly";
       const stuck = roundsRef.current.flatMap((round) =>
         round.responses.filter(
           (r) =>
@@ -618,25 +687,58 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         )
       );
       if (stuck.length > 0) {
+        const stuckKeys = new Set(stuck.map((r) => r.key));
         const next = roundsRef.current.map((round) => ({
           ...round,
           responses: round.responses.map((r) =>
-            (!opts.filterKey || r.key === opts.filterKey) &&
-            (r.status === "pending" || r.status === "streaming")
+            stuckKeys.has(r.key)
               ? {
                   ...r,
                   status: "error" as const,
-                  error: "Stream ended unexpectedly",
+                  error: stuckErrorMessage,
                 }
               : r
           ),
         }));
         roundsRef.current = next;
         setRounds(next);
+        // Apply the same auto-disable rules as a server-sent error so
+        // stragglers don't sneak into the next round / synthesis.
+        setContinueByModelKey((prev) => {
+          const out = { ...prev };
+          for (const r of stuck) {
+            out[modelKeyOf(r.provider, r.model)] = false;
+          }
+          return out;
+        });
+        setUseInSynthesisByKey((prev) => {
+          const out = { ...prev };
+          for (const k of Array.from(stuckKeys)) out[k] = false;
+          return out;
+        });
       }
     },
     []
   );
+
+  /**
+   * "Stop waiting on slow models" — user-facing escape hatch for hung
+   * lanes. Aborts the in-flight /api/compare fetch. The reader in
+   * consumeSseStream catches AbortError, the per-lane cleanup marks any
+   * still-pending lanes as errored with our abortedMessage, and the
+   * runCompare / runFollowUpCompare / askThisModel call site transitions
+   * phase → "done" so the workspace fully unlocks.
+   */
+  function cancelInFlightStream() {
+    const ctrl = abortRef.current;
+    if (!ctrl) return;
+    abortRef.current = null;
+    try {
+      ctrl.abort();
+    } catch {
+      // ignore — controller may already be aborted
+    }
+  }
 
   async function runCompare() {
     if (
@@ -694,6 +796,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     roundsRef.current = r0;
     setRounds(r0);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     let res: Response;
     try {
       res = await fetch("/api/compare", {
@@ -705,12 +810,16 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
           project_id: selectedProjectId || null,
           tone: selectedTone,
         }),
+        signal: controller.signal,
       });
     } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Network error");
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setGlobalError(err instanceof Error ? err.message : "Network error");
+      }
       setPhase("idle");
       setRounds([]);
       roundsRef.current = [];
+      abortRef.current = null;
       return;
     }
 
@@ -720,6 +829,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       setPhase("idle");
       setRounds([]);
       roundsRef.current = [];
+      abortRef.current = null;
       return;
     }
 
@@ -729,7 +839,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         streamedConversationId = id;
         setConversationId(id);
       },
+      abortedMessage:
+        "Stopped waiting on this model — it didn't respond in time.",
     });
+    abortRef.current = null;
 
     setPhase("saving");
     await persistRoundAndAttachIds(streamedConversationId ?? null);
@@ -849,7 +962,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
 
     if (participants.length === 0) {
       setGlobalError(
-        'No models have "Continue with this model" turned on. Turn it on for at least one model, or use "Ask this model" for a single-model follow-up.'
+        'No models have "Continue in next round" turned on. Turn it on for at least one model, or use "Ask this model" for a single-model follow-up.'
       );
       return;
     }
@@ -892,6 +1005,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     roundsRef.current = appended;
     setRounds(appended);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     let res: Response;
     try {
       res = await fetch("/api/compare", {
@@ -905,10 +1021,14 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
           conversation_id: conversationId,
           compare_follow_up: true,
         }),
+        signal: controller.signal,
       });
     } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Network error");
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setGlobalError(err instanceof Error ? err.message : "Network error");
+      }
       setPhase("done");
+      abortRef.current = null;
       const rolled = roundsRef.current.slice(0, -1);
       roundsRef.current = rolled;
       setRounds(rolled);
@@ -919,6 +1039,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       const errText = await res.text().catch(() => "");
       setGlobalError(errText || `Request failed (${res.status})`);
       setPhase("done");
+      abortRef.current = null;
       const rolled = roundsRef.current.slice(0, -1);
       roundsRef.current = rolled;
       setRounds(rolled);
@@ -929,7 +1050,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       onMeta: (id) => {
         setConversationId(id);
       },
+      abortedMessage:
+        "Stopped waiting on this model — it didn't respond in time.",
     });
+    abortRef.current = null;
 
     setPhase("saving");
     await persistRoundAndAttachIds(null);
@@ -993,6 +1117,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     roundsRef.current = appended;
     setRounds(appended);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     let res: Response;
     try {
       res = await fetch("/api/compare", {
@@ -1006,11 +1133,15 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
           conversation_id: conversationId,
           ask_model: true,
         }),
+        signal: controller.signal,
       });
     } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Network error");
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setGlobalError(err instanceof Error ? err.message : "Network error");
+      }
       setPhase("done");
       setAskingModelKey(null);
+      abortRef.current = null;
       const rolled = roundsRef.current.slice(0, -1);
       roundsRef.current = rolled;
       setRounds(rolled);
@@ -1022,6 +1153,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       setGlobalError(errText || `Request failed (${res.status})`);
       setPhase("done");
       setAskingModelKey(null);
+      abortRef.current = null;
       const rolled = roundsRef.current.slice(0, -1);
       roundsRef.current = rolled;
       setRounds(rolled);
@@ -1032,7 +1164,10 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
       onMeta: (id) => {
         setConversationId(id);
       },
+      abortedMessage:
+        "Stopped waiting on this model — it didn't respond in time.",
     });
+    abortRef.current = null;
 
     setPhase("saving");
     await persistRoundAndAttachIds(null);
@@ -1047,34 +1182,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     return prompt;
   }
 
-  function continueModelToChat(r: ResponseState) {
-    const q = promptForResponseKey(r.key);
-    if (!q.trim() || !r.content.trim()) return;
-    const nonce =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-    const payload: CompareToChatHandoff = {
-      provider: r.provider,
-      model: r.model,
-      comparePrompt: q,
-      compareResponse: r.content,
-      projectId: selectedProjectId || null,
-      tone: selectedTone,
-      pristineCompareThread: true,
-    };
-    try {
-      sessionStorage.setItem(
-        compareToChatStorageKey(nonce),
-        JSON.stringify(payload)
-      );
-    } catch {
-      setGlobalError("Could not open Chat (storage blocked).");
-      return;
-    }
-    const url = `/chat?fromCompare=1&h=${encodeURIComponent(nonce)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
+  // NOTE: "Continue in Chat" was removed in Session 12 — the receiving
+  // Chat page wasn't loading the handoff payload reliably, so the tab
+  // opened blank. The Compare→Chat handoff helper is still exported from
+  // lib/compare/to-chat-handoff.ts for a future restore once the Chat
+  // page is fixed. For now users stay inside Compare and use
+  // "Ask this model" for per-lane follow-ups.
 
   async function retryOne(r: ResponseState) {
     const roundPrompt = promptForResponseKey(r.key);
@@ -1090,6 +1203,13 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     setGlobalError(null);
     setRetryingKey(r.key);
     setPhase("streaming");
+
+    // Clicking "Retry model" is itself a re-engagement signal. Re-enable
+    // both toggles so a successful retry immediately participates again
+    // — otherwise the user has to do an extra two clicks after retry.
+    const mk = modelKeyOf(r.provider, r.model);
+    setContinueByModelKey((prev) => ({ ...prev, [mk]: true }));
+    setUseInSynthesisByKey((prev) => ({ ...prev, [r.key]: true }));
 
     updateCard(r.key, {
       status: "pending",
@@ -1184,9 +1304,9 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
   async function createSynthesis() {
     if (!conversationId || synthLoading) return;
     const sourceIds = selectedSynthesisResponseIds();
-    if (sourceIds.length < 2) {
+    if (sourceIds.length < 1) {
       setGlobalError(
-        'Pick at least two responses with "Use in Synthesis" before generating.'
+        'Mark at least one response with "Use in Synthesis" before generating.'
       );
       return;
     }
@@ -1328,11 +1448,17 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
     }
   }
 
-  const allComplete =
-    flatResponses.length > 0 &&
-    flatResponses.every((r) => r.status === "done" || r.status === "error");
-  const canContinueInChat =
-    allComplete && phase !== "streaming" && !retryingKey;
+  // Per-lane gates — no longer blocked by the slowest model. As soon as
+  // ANY lane finishes we expose the workspace footer; the user can act on
+  // settled lanes immediately and either wait on stragglers or click
+  // "Stop waiting on slow models".
+  const hasAnySettled = flatResponses.some(
+    (r) => r.status === "done" || r.status === "error"
+  );
+  const hasAnyPending = flatResponses.some(
+    (r) => r.status === "pending" || r.status === "streaming"
+  );
+  const canStopWaiting = phase === "streaming" && hasAnyPending && hasAnySettled;
 
   // ─── Per-model derived state (Session 11) ───────────────────────────────
   //
@@ -1566,9 +1692,24 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
               ? "Retrying…"
               : "Streaming…"
             : phase === "saving"
-              ? "Scoring…"
+              ? "Saving…"
               : "Run Compare"}
         </Button>
+        {/* "Stop waiting on slow models" — only offered when some lanes
+            are done while others are still pending. Without this, a 6-
+            model compare with one stuck provider blocks synthesis /
+            follow-up for the full 5-minute per-member timeout. */}
+        {canStopWaiting && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={cancelInFlightStream}
+          >
+            Stop waiting on slow models
+          </Button>
+        )}
         {selectedModels.length > 0 && (
           <span className="text-xs text-muted-foreground tabular-nums">
             Estimated: ~{formatCostRange(costEstimate)} for this{" "}
@@ -1577,7 +1718,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
         )}
         {phase === "saving" && (
           <span className="text-xs text-muted-foreground animate-pulse">
-            Ranking responses…
+            Saving responses…
           </span>
         )}
       </div>
@@ -1656,11 +1797,12 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                           ? () => void retryOne(r)
                           : undefined
                       }
-                      onContinueInChat={
-                        canContinueInChat && isComplete
-                          ? () => continueModelToChat(r)
-                          : undefined
-                      }
+                      // "Continue in Chat" is hidden until context-transfer
+                      // is fixed — for now keep users inside Compare and
+                      // use "Ask this model" instead. The handoff payload
+                      // builder (`continueModelToChat`) is intentionally
+                      // left in place for the future restore.
+                      onContinueInChat={undefined}
                       useInSynthesis={
                         isComplete
                           ? {
@@ -1727,14 +1869,18 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
             </div>
           )}
 
-          {/* ── Workspace actions: Synthesis + Grade selected ────────────── */}
-          {phase === "done" && allComplete && !retryingKey && conversationId && (
+          {/* ── Workspace actions: Synthesis + Grade selected ──────────────
+              Session 12: footer renders as soon as ANY lane has settled
+              and we have a conversation_id. Stragglers no longer block
+              synthesis / grading. Continue Compare still waits for the
+              stream to fully close (position-collision safety). */}
+          {hasAnySettled && !retryingKey && conversationId && (
             <div className="space-y-3 border-t pt-6">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <p className="text-xs text-muted-foreground">
                   {synthesisCount} response{synthesisCount === 1 ? "" : "s"}{" "}
                   selected for synthesis ·{" "}
-                  {continueCount} of {workspaceModels.length} model
+                  {continueCount} of {workspaceModels.length} active model
                   {workspaceModels.length === 1 ? "" : "s"} will continue
                 </p>
                 <Button
@@ -1759,7 +1905,7 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                 variant="default"
                 onClick={createSynthesis}
                 disabled={
-                  !conversationId || synthLoading || synthesisCount < 2
+                  !conversationId || synthLoading || synthesisCount < 1
                 }
               >
                 <Sparkles className="h-4 w-4" />
@@ -1769,25 +1915,27 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                       synthesisCount === 1 ? "" : "s"
                     }`}
               </Button>
-              {synthesisCount < 2 && (
+              {synthesisCount < 1 && (
                 <p className="text-xs text-center text-muted-foreground">
-                  Pick at least two responses with “Use in Synthesis” to
-                  enable Synthesis.
+                  Mark at least one response “Use in Synthesis” to enable
+                  Synthesis. Two or more is recommended.
                 </p>
               )}
             </div>
           )}
 
-          {/* ── Main follow-up ───────────────────────────────────────────── */}
-          {phase === "done" && allComplete && !retryingKey && conversationId && (
+          {/* ── Main follow-up ─────────────────────────────────────────────
+              Visible as soon as we have a conversation. The button is
+              disabled while phase === "streaming" so a new round can't
+              race position assignment with the in-flight one. */}
+          {hasAnySettled && !retryingKey && conversationId && (
             <div className="space-y-3 border-t pt-6">
               <p className="text-xs font-medium text-muted-foreground">
-                Ask a follow-up to the {continueCount} model
-                {continueCount === 1 ? "" : "s"} marked “Continue with this
-                model”
+                Send follow-up to {continueCount} active model
+                {continueCount === 1 ? "" : "s"}
               </p>
               <Textarea
-                placeholder="Continue the thread — only models with 'Continue with this model' on will reply…"
+                placeholder="Continue the thread — only models with 'Continue in next round' on will reply…"
                 className="resize-none min-h-[80px]"
                 value={followUpPrompt}
                 onChange={(e) => setFollowUpPrompt(e.target.value)}
@@ -1800,17 +1948,29 @@ export function CompareUI({ projects, connections, teams }: CompareUIProps) {
                 disabled={
                   !followUpPrompt.trim() ||
                   continueCount === 0 ||
+                  phase === "streaming" ||
                   !!retryingKey
                 }
               >
                 <Zap className="h-4 w-4" />
-                Continue Compare
+                {phase === "streaming"
+                  ? "Waiting for current round…"
+                  : `Send follow-up to ${continueCount} active model${
+                      continueCount === 1 ? "" : "s"
+                    }`}
               </Button>
               {continueCount === 0 && workspaceModels.length > 0 && (
                 <p className="text-xs text-muted-foreground">
                   No models will receive this follow-up. Turn on “Continue
-                  with this model” on at least one card, or use “Ask this
+                  in next round” on at least one card, or use “Ask this
                   model” on a card for a single-model follow-up.
+                </p>
+              )}
+              {phase === "streaming" && hasAnyPending && (
+                <p className="text-xs text-muted-foreground">
+                  Some models are still responding. Wait for them, or
+                  click <strong>Stop waiting on slow models</strong> below
+                  to skip stragglers and continue.
                 </p>
               )}
             </div>

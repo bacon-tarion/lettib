@@ -160,11 +160,14 @@ export async function POST(req: NextRequest) {
 
   const successful = pool.filter((r) => !r.error && r.content?.trim());
 
-  if (successful.length < 2) {
+  // Session 12: synthesis unlocks at >=1 selected response so failed
+  // lanes never block the workspace. A 1-response synthesis is mostly a
+  // light tone-rewrite, but the user explicitly opted in by selecting it.
+  if (successful.length < 1) {
     return NextResponse.json(
       {
         error:
-          "Need at least 2 successful responses to synthesize. Select at least two with “Use in Synthesis”.",
+          'Need at least one successful response to synthesize. Mark a response with "Use in Synthesis".',
       },
       { status: 400 }
     );
