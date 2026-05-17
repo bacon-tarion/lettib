@@ -24,6 +24,104 @@ const TONE_MAP: Record<string, string> = {
 
 type ModelSpec = { provider: string; model: string };
 
+type AnthropicUsage = {
+  inputTokens: number;
+  outputTokens: number;
+};
+
+async function streamAnthropicText(input: {
+  apiKey: string;
+  model: string;
+  userContent: string;
+  systemPrompt?: string;
+  onText: (text: string) => void;
+}): Promise<AnthropicUsage> {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": input.apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: input.model,
+      max_tokens: 4096,
+      stream: true,
+      ...(input.systemPrompt ? { system: input.systemPrompt } : {}),
+      messages: [{ role: "user", content: input.userContent }],
+    }),
+  });
+
+  if (!res.ok) {
+    const details = await res.text().catch(() => "");
+    throw new Error(
+      details || `Anthropic stream failed with status ${res.status}`
+    );
+  }
+  if (!res.body) throw new Error("Anthropic stream response had no body");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  const handleEvent = (raw: string) => {
+    const data = raw
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n");
+    if (!data || data === "[DONE]") return;
+
+    const event = JSON.parse(data) as {
+      type?: string;
+      error?: { message?: string };
+      usage?: { input_tokens?: number; output_tokens?: number };
+      message?: {
+        usage?: { input_tokens?: number; output_tokens?: number };
+      };
+      delta?: { type?: string; text?: string };
+    };
+
+    if (event.type === "error") {
+      throw new Error(event.error?.message ?? "Anthropic stream failed");
+    }
+    if (typeof event.message?.usage?.input_tokens === "number") {
+      inputTokens = event.message.usage.input_tokens;
+    }
+    if (typeof event.message?.usage?.output_tokens === "number") {
+      outputTokens = event.message.usage.output_tokens;
+    }
+    if (typeof event.usage?.input_tokens === "number") {
+      inputTokens = event.usage.input_tokens;
+    }
+    if (typeof event.usage?.output_tokens === "number") {
+      outputTokens = event.usage.output_tokens;
+    }
+    if (
+      event.type === "content_block_delta" &&
+      event.delta?.type === "text_delta" &&
+      typeof event.delta.text === "string"
+    ) {
+      input.onText(event.delta.text);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split(/\r?\n\r?\n/);
+    buffer = events.pop() ?? "";
+    for (const event of events) handleEvent(event);
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) handleEvent(buffer);
+
+  return { inputTokens, outputTokens };
+}
+
 function normalizeModelIds(raw: unknown): ModelSpec[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const out: ModelSpec[] = [];
@@ -719,29 +817,47 @@ export async function POST(req: NextRequest) {
         const work = async () => {
           enqueue({ type: "start", key });
 
-          const result = await streamChat({
-            provider: spec.provider as
-              | "openai"
-              | "anthropic"
-              | "google"
-              | "xai"
-              | "groq"
-              | "custom",
-            model: spec.model,
-            apiKey,
-            baseUrl: baseUrl ?? undefined,
-            messages: [{ role: "user", content: userContent }],
-            systemPrompt: systemPrompt || undefined,
-          });
+          let tokensIn = 0;
+          let tokensOut = 0;
 
-          for await (const chunk of result.textStream) {
-            accumulated += chunk;
-            enqueue({ type: "chunk", key, text: chunk });
+          if (spec.provider === "anthropic") {
+            const usage = await streamAnthropicText({
+              apiKey,
+              model: spec.model,
+              userContent,
+              systemPrompt: systemPrompt || undefined,
+              onText: (chunk) => {
+                accumulated += chunk;
+                enqueue({ type: "chunk", key, text: chunk });
+              },
+            });
+            tokensIn = usage.inputTokens;
+            tokensOut = usage.outputTokens;
+          } else {
+            const result = await streamChat({
+              provider: spec.provider as
+                | "openai"
+                | "anthropic"
+                | "google"
+                | "xai"
+                | "groq"
+                | "custom",
+              model: spec.model,
+              apiKey,
+              baseUrl: baseUrl ?? undefined,
+              messages: [{ role: "user", content: userContent }],
+              systemPrompt: systemPrompt || undefined,
+            });
+
+            for await (const chunk of result.textStream) {
+              accumulated += chunk;
+              enqueue({ type: "chunk", key, text: chunk });
+            }
+
+            const usage = await result.usage;
+            tokensIn = usage?.promptTokens ?? 0;
+            tokensOut = usage?.completionTokens ?? 0;
           }
-
-          const usage = await result.usage;
-          const tokensIn = usage?.promptTokens ?? 0;
-          const tokensOut = usage?.completionTokens ?? 0;
           const latency_ms = Date.now() - startedAt;
           const cost_usd = calcCompareModelCost(
             spec.provider,
