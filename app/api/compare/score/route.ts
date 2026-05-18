@@ -9,7 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getServerApiKey } from "@/lib/providers";
 import { buildScoringMessage } from "@/lib/prompts/scoring";
-import { calcCompareModelCost } from "@/lib/compare/cost";
+import { logUsageAsync } from "@/lib/usage/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -295,21 +295,15 @@ export async function POST(req: NextRequest) {
     // attribute the cost correctly (it does not count as a Compare call).
     const tokens_in = result.usage?.promptTokens ?? 0;
     const tokens_out = result.usage?.completionTokens ?? 0;
-    await serviceClient.from("usage_logs").insert({
-      user_id: user.id,
-      conversation_id: conversationId,
+    logUsageAsync(serviceClient, {
+      userId: user.id,
+      conversationId,
       action: "scoring",
       provider: scorerProvider,
       model: scorerModel,
-      tokens_in,
-      tokens_out,
-      cost_usd: calcCompareModelCost(
-        scorerProvider,
-        scorerModel,
-        tokens_in,
-        tokens_out
-      ),
-      latency_ms,
+      tokensIn: tokens_in,
+      tokensOut: tokens_out,
+      latencyMs: latency_ms,
     });
   } catch (err) {
     scoringError = err instanceof Error ? err.message : "Scoring failed";

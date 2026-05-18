@@ -5,6 +5,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { streamChat } from "@/lib/providers";
 import { MODELS_CATALOG } from "@/lib/providers/models";
 import { MEMORY_INJECTION_PROMPT } from "@/lib/prompts/synthesis";
+import { logUsageAsync } from "@/lib/usage/log";
 
 type ProviderName =
   | "openai"
@@ -253,6 +254,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const startedAt = Date.now();
     const result = await streamChat({
       provider,
       model,
@@ -262,6 +264,18 @@ export async function POST(req: NextRequest) {
         undefined,
       messages,
       systemPrompt: systemPrompt || undefined,
+      onFinish: ({ usage }) => {
+        logUsageAsync(serviceClient, {
+          userId: user.id,
+          conversationId,
+          action: "chat",
+          provider,
+          model,
+          tokensIn: usage?.promptTokens,
+          tokensOut: usage?.completionTokens,
+          latencyMs: Date.now() - startedAt,
+        });
+      },
     });
 
     return result.toDataStreamResponse({

@@ -37,6 +37,13 @@ function daysAgoIso(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
+function startOfCurrentWeekIso(): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay());
+  return d.toISOString();
+}
+
 /**
  * Fetches the current user's usage_logs scoped under user auth context (RLS
  * enforces user_id = auth.uid()). Aggregates in JS — acceptable for v1
@@ -157,7 +164,7 @@ export async function getUserUsageSummary(): Promise<UserUsageSummary | null> {
 }
 
 /**
- * Lightweight snapshot for the dashboard right-rail card — last 7 days.
+ * Lightweight snapshot for the dashboard right-rail card — current week.
  */
 export async function getUserUsageSnapshot(): Promise<UserUsageSnapshot | null> {
   const sb = await createClient();
@@ -170,7 +177,7 @@ export async function getUserUsageSnapshot(): Promise<UserUsageSnapshot | null> 
     .from("usage_logs")
     .select("provider, tokens_in, tokens_out, cost_usd")
     .eq("user_id", user.id)
-    .gte("created_at", daysAgoIso(7))
+    .gte("created_at", startOfCurrentWeekIso())
     .limit(100000);
 
   const rows = (data ?? []) as Pick<

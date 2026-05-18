@@ -14,6 +14,7 @@ import {
 import { MEMORY_EXTRACTION_PROMPT } from "@/lib/prompts/memory";
 import { MEMORY_FIELDS, type MemoryFieldKey } from "@/lib/memory/fields";
 import { upsertMemoryFields } from "@/lib/memory/queries";
+import { logUsageAsync } from "@/lib/usage/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -311,16 +312,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await serviceClient.from("usage_logs").insert({
-      user_id: user.id,
-      conversation_id: comparisonId,
+    logUsageAsync(serviceClient, {
+      userId: user.id,
+      conversationId: comparisonId,
       action: "synthesis",
       provider: SYNTH_PROVIDER,
       model: SYNTH_MODEL,
-      tokens_in: tokensIn,
-      tokens_out: tokensOut,
-      cost_usd: cost,
-      latency_ms: latency,
+      tokensIn,
+      tokensOut,
+      costUsd: cost,
+      latencyMs: latency,
     });
 
     if (projectId) {
@@ -402,21 +403,21 @@ export async function POST(req: NextRequest) {
 
           const extractTokensIn = extractionResult.usage?.promptTokens ?? 0;
           const extractTokensOut = extractionResult.usage?.completionTokens ?? 0;
-          await serviceClient.from("usage_logs").insert({
-            user_id: user.id,
-            conversation_id: comparisonId,
+          logUsageAsync(serviceClient, {
+            userId: user.id,
+            conversationId: comparisonId,
             action: "memory_extraction",
             provider: SYNTH_PROVIDER,
             model: SYNTH_MODEL,
-            tokens_in: extractTokensIn,
-            tokens_out: extractTokensOut,
-            cost_usd: calcCost(
+            tokensIn: extractTokensIn,
+            tokensOut: extractTokensOut,
+            costUsd: calcCost(
               SYNTH_PROVIDER,
               SYNTH_MODEL,
               extractTokensIn,
               extractTokensOut
             ),
-            latency_ms: 0,
+            latencyMs: 0,
           });
         }
       } catch (err) {

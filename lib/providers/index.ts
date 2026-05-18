@@ -32,6 +32,7 @@ export type StreamChatInput = {
   baseUrl?: string;
   messages: CoreMessage[];
   systemPrompt?: string;
+  onFinish?: Parameters<typeof streamText>[0]["onFinish"];
 };
 
 /**
@@ -47,7 +48,8 @@ export function getServerApiKey(provider: string): string | null {
 }
 
 export async function streamChat(input: StreamChatInput) {
-  const { provider, model, apiKey, baseUrl, messages, systemPrompt } = input;
+  const { provider, model, apiKey, baseUrl, messages, systemPrompt, onFinish } =
+    input;
 
   type ModelInstance = Parameters<typeof streamText>[0]["model"];
   let modelInstance: ModelInstance;
@@ -80,5 +82,6 @@ export async function streamChat(input: StreamChatInput) {
     model: modelInstance,
     system: systemPrompt,
     messages,
+    onFinish,
   });
 }

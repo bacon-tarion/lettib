@@ -91,7 +91,6 @@ export async function POST(req: NextRequest) {
   // values fall back to 0 — we don't accept unbounded user-supplied costs.
   const tokensIn = asInt(body.tokens_in);
   const tokensOut = asInt(body.tokens_out);
-  const latencyMs = asInt(body.latency_ms);
 
   const serviceClient = createServiceClient();
   let convId = conversationIdInput;
@@ -183,28 +182,6 @@ export async function POST(req: NextRequest) {
   if (insertError) {
     return NextResponse.json({ error: insertError.message }, { status: 500 });
   }
-
-  const catalog = MODELS_CATALOG as Record<
-    string,
-    readonly { id: string; cost_in: number; cost_out: number }[]
-  >;
-  const modelEntry = catalog[provider]?.find((m) => m.id === model);
-  const costUsd = modelEntry
-    ? (modelEntry.cost_in * tokensIn) / 1_000_000 +
-      (modelEntry.cost_out * tokensOut) / 1_000_000
-    : 0;
-
-  await serviceClient.from("usage_logs").insert({
-    user_id: user.id,
-    conversation_id: convId,
-    action: "chat",
-    provider,
-    model,
-    tokens_in: tokensIn,
-    tokens_out: tokensOut,
-    cost_usd: costUsd,
-    latency_ms: latencyMs,
-  });
 
   return NextResponse.json({ success: true, conversation_id: convId });
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { calcCompareModelCost } from "@/lib/compare/cost";
+import { logUsageAsync } from "@/lib/usage/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -211,26 +212,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const usageLogs = responses
-    .filter((r) => !r.error)
-    .map((r) => ({
-      user_id: user.id,
-      conversation_id: conversationId,
+  for (const r of responses) {
+    if (r.error) continue;
+    logUsageAsync(serviceClient, {
+      userId: user.id,
+      conversationId,
       action: "compare",
       provider: r.provider,
       model: r.model,
-      tokens_in: r.tokens_in || 0,
-      tokens_out: r.tokens_out || 0,
-      cost_usd: calcCompareModelCost(
+      tokensIn: r.tokens_in || 0,
+      tokensOut: r.tokens_out || 0,
+      costUsd: calcCompareModelCost(
         r.provider,
         r.model,
         r.tokens_in || 0,
         r.tokens_out || 0
       ),
-      latency_ms: r.latency_ms || 0,
-    }));
-  if (usageLogs.length > 0) {
-    await serviceClient.from("usage_logs").insert(usageLogs);
+      latencyMs: r.latency_ms || 0,
+    });
   }
 
   const responseIds: { key: string; id: string }[] = [];

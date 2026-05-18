@@ -13,6 +13,7 @@ import {
   extractConflictsBlock,
   parseLineage,
 } from "@/lib/synthesis/lineage";
+import { logUsageAsync } from "@/lib/usage/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -358,16 +359,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await serviceClient.from("usage_logs").insert({
-      user_id: user.id,
-      conversation_id: null,
+    logUsageAsync(serviceClient, {
+      userId: user.id,
+      conversationId: null,
       action: "synthesis_manual",
       provider: synthProvider,
       model: synthModel,
-      tokens_in: tokensIn,
-      tokens_out: tokensOut,
-      cost_usd: cost,
-      latency_ms: latency,
+      tokensIn,
+      tokensOut,
+      costUsd: cost,
+      latencyMs: latency,
     });
 
     return NextResponse.json({

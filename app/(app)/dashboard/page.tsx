@@ -178,13 +178,13 @@ export default async function DashboardPage() {
           <Card>
             <CardContent className="pt-4 space-y-4">
               <div className="flex justify-between items-center">
-                <span className="text-xs text-muted-foreground">Tokens (7d)</span>
+                <span className="text-xs text-muted-foreground">Tokens (week)</span>
                 <span className="font-semibold text-sm tabular-nums">
                   {(snapshot?.week_tokens ?? 0).toLocaleString()}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-xs text-muted-foreground">Cost (7d)</span>
+                <span className="text-xs text-muted-foreground">Cost (week)</span>
                 <span className="font-semibold text-sm tabular-nums">
                   ${(snapshot?.week_cost_usd ?? 0).toFixed(4)}
                 </span>
@@ -229,7 +229,7 @@ export default async function DashboardPage() {
               )}
               {(!snapshot || snapshot.week_tokens === 0) && (
                 <p className="text-[11px] text-muted-foreground text-center pt-1">
-                  No usage in the last 7 days.
+                  No usage this week.
                 </p>
               )}
             </CardContent>

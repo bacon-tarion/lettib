@@ -15,6 +15,7 @@ import {
   type Conflict,
 } from "@/lib/synthesis/lineage";
 import { SYNTHESIS_OUTPUT_FORMAT } from "@/lib/prompts/synthesis";
+import { logUsageAsync } from "@/lib/usage/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -275,16 +276,16 @@ ${formattedResponses}`;
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    await sb.from("usage_logs").insert({
-      user_id: user.id,
-      conversation_id: s.conversation_id,
+    logUsageAsync(sb, {
+      userId: user.id,
+      conversationId: s.conversation_id,
       action: "synthesis_resolve",
       provider: s.provider,
       model: s.model,
-      tokens_in: tokensIn,
-      tokens_out: tokensOut,
-      cost_usd: cost,
-      latency_ms: latency,
+      tokensIn,
+      tokensOut,
+      costUsd: cost,
+      latencyMs: latency,
     });
 
     return NextResponse.json({ ok: true });

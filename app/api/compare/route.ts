@@ -7,6 +7,7 @@ import { FREE_COMPARE_LIMIT } from "@/lib/usage/limits";
 import { MAX_COMPARE_PARALLEL_MODELS } from "@/lib/compare/constants";
 import { MODELS_CATALOG } from "@/lib/providers/models";
 import { calcCompareModelCost } from "@/lib/compare/cost";
+import { logUsageAsync } from "@/lib/usage/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -883,16 +884,16 @@ export async function POST(req: NextRequest) {
             error: null,
           });
 
-          await serviceClient.from("usage_logs").insert({
-            user_id: user.id,
-            conversation_id: conversationId,
+          logUsageAsync(serviceClient, {
+            userId: user.id,
+            conversationId,
             action: "compare",
             provider: spec.provider,
             model: spec.model,
-            tokens_in: tokensIn,
-            tokens_out: tokensOut,
-            cost_usd,
-            latency_ms,
+            tokensIn,
+            tokensOut,
+            costUsd: cost_usd,
+            latencyMs: latency_ms,
           });
         };
 
