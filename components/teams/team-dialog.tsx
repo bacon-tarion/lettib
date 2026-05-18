@@ -49,6 +49,16 @@ type ProviderGroup = {
   models: Array<{ modelId: string; modelName: string }>;
 };
 
+function getModelWarningNote(modelId: string): string | null {
+  if (modelId === "gemini-2.5-pro") {
+    return "Requires Google paid tier (5 RPM limit on free tier)";
+  }
+  if (modelId === "claude-opus-4-7") {
+    return "Slower response times — best for complex tasks";
+  }
+  return null;
+}
+
 export function TeamDialog({
   open,
   team,
@@ -212,18 +222,30 @@ export function TeamDialog({
                     const isSelected = selectedModels.some(
                       (m) => m.provider === group.provider && m.model === modelId
                     );
+                    const warningNote = getModelWarningNote(modelId);
                     return (
                       <button
                         key={modelId}
                         type="button"
                         onClick={() => toggleModel(group.provider, modelId)}
-                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors cursor-pointer ${
+                        className={`inline-flex flex-wrap items-baseline gap-x-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors cursor-pointer ${
                           isSelected
                             ? "bg-primary text-primary-foreground border-primary"
                             : "border-border text-muted-foreground hover:border-foreground hover:text-foreground bg-background"
                         }`}
                       >
-                        {modelName}
+                        <span>{modelName}</span>
+                        {warningNote && (
+                          <span
+                            className={
+                              isSelected
+                                ? "text-[11px] text-primary-foreground/75"
+                                : "text-[11px] text-muted-foreground"
+                            }
+                          >
+                            {warningNote}
+                          </span>
+                        )}
                       </button>
                     );
                   })}
@@ -244,11 +266,21 @@ export function TeamDialog({
                 <SelectValue placeholder="Select primary model…" />
               </SelectTrigger>
               <SelectContent>
-                {selectedModels.map(({ provider, model }) => (
-                  <SelectItem key={`${provider}:${model}`} value={model}>
-                    {getModelDisplayName(provider, model)}
-                  </SelectItem>
-                ))}
+                {selectedModels.map(({ provider, model }) => {
+                  const warningNote = getModelWarningNote(model);
+                  return (
+                    <SelectItem key={`${provider}:${model}`} value={model}>
+                      <span className="inline-flex flex-wrap items-baseline gap-x-1">
+                        <span>{getModelDisplayName(provider, model)}</span>
+                        {warningNote && (
+                          <span className="text-[11px] text-muted-foreground">
+                            {warningNote}
+                          </span>
+                        )}
+                      </span>
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>

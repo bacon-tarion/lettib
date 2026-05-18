@@ -52,6 +52,16 @@ type ModelPick = {
   modelId: string;
 };
 
+function getModelWarningNote(modelId: string): string | null {
+  if (modelId === "gemini-2.5-pro") {
+    return "Requires Google paid tier (5 RPM limit on free tier)";
+  }
+  if (modelId === "claude-opus-4-7") {
+    return "Slower response times — best for complex tasks";
+  }
+  return null;
+}
+
 function buildModelPicks(connections: CompareConnection[]): ModelPick[] {
   const catalog = MODELS_CATALOG as Record<
     string,
@@ -1715,6 +1725,7 @@ export function CompareUI({
         <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto border rounded-md p-3">
           {modelPicks.map((p) => {
             const checked = selectedValues.has(p.value);
+            const warningNote = getModelWarningNote(p.modelId);
             const atCap =
               selectedValues.size >= MAX_COMPARE_PARALLEL_MODELS && !checked;
             return (
@@ -1736,7 +1747,14 @@ export function CompareUI({
                   disabled={atCap}
                   onChange={() => toggleModel(p.value)}
                 />
-                <span>{p.label}</span>
+                <span className="inline-flex flex-wrap items-baseline gap-x-1">
+                  <span>{p.label}</span>
+                  {warningNote && (
+                    <span className="text-[11px] text-muted-foreground">
+                      {warningNote}
+                    </span>
+                  )}
+                </span>
               </label>
             );
           })}
