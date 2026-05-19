@@ -51,6 +51,7 @@ export function logUsageAsync(
   client: UsageLogClient,
   input: UsageLogInput
 ): void {
+  console.log('[USAGE_LOG] Attempting to write:', JSON.stringify(input));
   void client;
   const tokensIn = asNonNegativeInt(input.tokensIn);
   const tokensOut = asNonNegativeInt(input.tokensOut);
@@ -87,13 +88,7 @@ export function logUsageAsync(
         console.error("[usage_logs] insert failed:", error);
       }
     })
-    .catch((err: unknown) => {
-      console.error("[usage_logs] insert threw:", {
-        error: err,
-        action: row.action,
-        provider: row.provider,
-        model: row.model,
-        conversation_id: row.conversation_id,
-      });
+    .catch((error: unknown) => {
+      console.error('[USAGE_LOG] Insert failed:', error);
     });
 }
