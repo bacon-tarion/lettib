@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers";
 import { LETTIB_SYNTHESIS_ATTRIBUTION_PROMPT } from "@/lib/prompts/synthesis-attribution";
+import { LETTIB_SYNTHESIS_CLEAN_PROMPT } from "@/lib/prompts/synthesis-clean";
 import { formatCompareResponsesForAttribution } from "@/lib/synthesis/attribution-tags";
 import {
   extractConflictsBlock,
@@ -239,6 +240,43 @@ export async function POST(req: NextRequest) {
     const { conflicts, bodyWithoutBlock } = extractConflictsBlock(result.text);
     const { lineage } = parseLineage(bodyWithoutBlock);
 
+    // Second pass: reformat the Detailed synthesis as one flowing prose answer
+    // for the Clean toggle. Uses the same provider/model so the user only ever
+    // pays for the providers they connected. Runs sequentially because it
+    // needs the Detailed output as input. On failure the Detailed view still
+    // saves; we just record an empty Clean and let the page fall back.
+    let cleanContent: string | null = null;
+    let cleanTokensIn = 0;
+    let cleanTokensOut = 0;
+    let cleanCost = 0;
+    let cleanLatency = 0;
+    try {
+      const cleanPrompt = LETTIB_SYNTHESIS_CLEAN_PROMPT.replace(
+        "{{user_question}}",
+        prompt
+      )
+        .replace("{{tone}}", toneUsed)
+        .replace("{{detailed_synthesis}}", bodyWithoutBlock);
+
+      const cleanStartedAt = Date.now();
+      const cleanResult = await generateText({
+        model: synthModel,
+        messages: [{ role: "user", content: cleanPrompt }],
+      });
+      cleanLatency = Date.now() - cleanStartedAt;
+      cleanTokensIn = cleanResult.usage?.promptTokens ?? 0;
+      cleanTokensOut = cleanResult.usage?.completionTokens ?? 0;
+      cleanCost = calcCost(
+        SYNTH_PROVIDER,
+        SYNTH_MODEL,
+        cleanTokensIn,
+        cleanTokensOut
+      );
+      cleanContent = cleanResult.text.trim();
+    } catch (cleanErr) {
+      console.error("[synthesis] clean pass failed (Detailed still saved):", cleanErr);
+    }
+
     const id = randomUUID();
     const row = {
       id,
@@ -247,6 +285,8 @@ export async function POST(req: NextRequest) {
       project_id: projectId,
       prompt,
       content: bodyWithoutBlock,
+      detailed_content: bodyWithoutBlock,
+      clean_content: cleanContent,
       tone: toneUsed,
       provider: SYNTH_PROVIDER,
       model: SYNTH_MODEL,
@@ -254,6 +294,12 @@ export async function POST(req: NextRequest) {
       tokens_out: tokensOut,
       cost_usd: cost,
       latency_ms: latency,
+      clean_provider: cleanContent ? SYNTH_PROVIDER : null,
+      clean_model: cleanContent ? SYNTH_MODEL : null,
+      clean_tokens_in: cleanTokensIn,
+      clean_tokens_out: cleanTokensOut,
+      clean_cost_usd: cleanCost,
+      clean_latency_ms: cleanLatency,
       source_response_ids: successful.map((r) => r.id),
       lineage_data: lineage,
       conflict_resolutions: conflicts.map((c) => ({ ...c, chosen: null })),
@@ -281,6 +327,8 @@ export async function POST(req: NextRequest) {
       project_id: projectId,
       prompt,
       content: bodyWithoutBlock,
+      detailed_content: bodyWithoutBlock,
+      clean_content: cleanContent,
       provider: SYNTH_PROVIDER,
       model: SYNTH_MODEL,
       tone: toneUsed,
@@ -288,6 +336,12 @@ export async function POST(req: NextRequest) {
       tokens_out: tokensOut,
       cost_usd: cost,
       latency_ms: latency,
+      clean_provider: cleanContent ? SYNTH_PROVIDER : null,
+      clean_model: cleanContent ? SYNTH_MODEL : null,
+      clean_tokens_in: cleanTokensIn,
+      clean_tokens_out: cleanTokensOut,
+      clean_cost_usd: cleanCost,
+      clean_latency_ms: cleanLatency,
       source_response_ids: successful.map((r) => r.id),
       lineage_data: lineage,
       conflict_resolutions: conflicts.map((c) => ({ ...c, chosen: null })),
@@ -323,6 +377,20 @@ export async function POST(req: NextRequest) {
       costUsd: cost,
       latencyMs: latency,
     });
+
+    if (cleanContent) {
+      logUsageAsync(serviceClient, {
+        userId: user.id,
+        conversationId: comparisonId,
+        action: "synthesis_clean",
+        provider: SYNTH_PROVIDER,
+        model: SYNTH_MODEL,
+        tokensIn: cleanTokensIn,
+        tokensOut: cleanTokensOut,
+        costUsd: cleanCost,
+        latencyMs: cleanLatency,
+      });
+    }
 
     if (projectId) {
       try {

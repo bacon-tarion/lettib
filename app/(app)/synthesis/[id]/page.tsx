@@ -11,7 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { SynthesisActions } from "./synthesis-actions";
 import { ConflictResolver } from "@/components/synthesis/conflict-resolver";
-import { SynthesisMarkdown } from "@/components/synthesis/synthesis-markdown";
+import { SynthesisView } from "@/components/synthesis/synthesis-view";
 import type { Conflict } from "@/lib/synthesis/lineage";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +41,7 @@ export default async function SynthesisPage({
   const { data: synth } = await serviceClient
     .from("syntheses")
     .select(
-      "id, user_id, conversation_id, project_id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, score, user_feedback, conflict_resolutions"
+      "id, user_id, conversation_id, project_id, prompt, content, detailed_content, clean_content, clean_cost_usd, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, score, user_feedback, conflict_resolutions"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -56,6 +56,9 @@ export default async function SynthesisPage({
     project_id: string | null;
     prompt: string;
     content: string;
+    detailed_content: string | null;
+    clean_content: string | null;
+    clean_cost_usd: number | null;
     provider: string | null;
     model: string | null;
     tone: string;
@@ -109,8 +112,14 @@ export default async function SynthesisPage({
     );
   }
 
-  const synthesisCost = Number(synthesis.cost_usd ?? 0);
-  const totalCost = compareCostUsd + synthesisCost;
+  const detailedSynthCost = Number(synthesis.cost_usd ?? 0);
+  const cleanSynthCost = Number(synthesis.clean_cost_usd ?? 0);
+  const totalCost = compareCostUsd + detailedSynthCost + cleanSynthCost;
+
+  const detailedBody = synthesis.detailed_content ?? synthesis.content;
+  const cleanBody = synthesis.clean_content;
+  const hasClean =
+    typeof cleanBody === "string" && cleanBody.trim().length > 0;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -155,12 +164,7 @@ export default async function SynthesisPage({
         />
       )}
 
-      <div>
-        <p className="text-xs text-muted-foreground mb-2 font-medium uppercase tracking-wider">
-          Merged answer
-        </p>
-        <SynthesisMarkdown content={synthesis.content} />
-      </div>
+      <SynthesisView detailedContent={detailedBody} cleanContent={cleanBody} />
 
       <Card className="border-dashed bg-muted/20">
         <CardContent className="pt-4 pb-3 space-y-1.5">
@@ -172,9 +176,17 @@ export default async function SynthesisPage({
               Compare (models):{" "}
               <strong className="text-foreground">${compareCostUsd.toFixed(5)}</strong>
             </span>
+            <span className="text-muted-foreground">·</span>
             <span>
-              Synthesis ({synthesis.model ?? "—"}):{" "}
-              <strong className="text-foreground">${synthesisCost.toFixed(5)}</strong>
+              Synthesis (detailed):{" "}
+              <strong className="text-foreground">${detailedSynthCost.toFixed(5)}</strong>
+            </span>
+            <span className="text-muted-foreground">·</span>
+            <span>
+              Synthesis (clean):{" "}
+              <strong className="text-foreground">
+                {hasClean ? `$${cleanSynthCost.toFixed(5)}` : "—"}
+              </strong>
             </span>
             <span className="text-muted-foreground">·</span>
             <span>
