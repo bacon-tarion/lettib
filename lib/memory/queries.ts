@@ -12,6 +12,7 @@ const EMPTY_MEMORY = (
 ): MemoryRow => ({
   project_id: projectId,
   user_id: userId,
+  content: null,
   project_goal: null,
   important_decisions: null,
   user_preferences: null,

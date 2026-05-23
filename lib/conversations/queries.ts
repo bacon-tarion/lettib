@@ -13,6 +13,9 @@ export type ConversationSummary = {
   cost_usd: number;
   created_at: string;
   updated_at: string;
+  pinned?: boolean;
+  round_count?: number;
+  models?: { provider: string; model: string }[];
 };
 
 function calcCost(
@@ -41,22 +44,31 @@ function calcCost(
 export async function listConversationsForUser(opts: {
   userId: string;
   projectId?: string | null;
+  /** When true, only return conversations with project_id IS NULL */
+  standalone?: boolean;
+  mode?: "chat" | "compare";
   limit?: number;
 }): Promise<ConversationSummary[]> {
-  const { userId, projectId, limit } = opts;
+  const { userId, projectId, standalone, mode, limit } = opts;
   const sc = createServiceClient();
 
   let query = sc
     .from("conversations")
     .select(
-      "id, title, mode, provider, model, project_id, created_at, updated_at, projects(name)"
+      "id, title, mode, provider, model, project_id, pinned, created_at, updated_at, projects(name)"
     )
     .eq("user_id", userId)
     .is("deleted_at", null)
+    .order("pinned", { ascending: false })
     .order("updated_at", { ascending: false });
 
-  if (projectId !== undefined && projectId !== null) {
+  if (standalone) {
+    query = query.is("project_id", null);
+  } else if (projectId !== undefined && projectId !== null) {
     query = query.eq("project_id", projectId);
+  }
+  if (mode) {
+    query = query.eq("mode", mode);
   }
   if (limit) query = query.limit(limit);
 
@@ -76,7 +88,7 @@ export async function listConversationsForUser(opts: {
   // duplicate the user prompt message)
   const { data: responses } = await sc
     .from("model_responses")
-    .select("conversation_id, cost_usd")
+    .select("conversation_id, provider, model, cost_usd, round_index")
     .in("conversation_id", conversationIds);
 
   const messageCount = new Map<string, number>();
@@ -103,9 +115,14 @@ export async function listConversationsForUser(opts: {
 
   const responseCost = new Map<string, number>();
   const responseCount = new Map<string, number>();
+  const roundMax = new Map<string, number>();
+  const modelsByConv = new Map<string, { provider: string; model: string }[]>();
   for (const r of (responses ?? []) as {
     conversation_id: string;
+    provider: string;
+    model: string;
     cost_usd: number | null;
+    round_index: number | null;
   }[]) {
     responseCost.set(
       r.conversation_id,
@@ -115,6 +132,13 @@ export async function listConversationsForUser(opts: {
       r.conversation_id,
       (responseCount.get(r.conversation_id) ?? 0) + 1
     );
+    const ri = r.round_index ?? 0;
+    roundMax.set(r.conversation_id, Math.max(roundMax.get(r.conversation_id) ?? 0, ri));
+    const list = modelsByConv.get(r.conversation_id) ?? [];
+    if (!list.some((m) => m.provider === r.provider && m.model === r.model)) {
+      list.push({ provider: r.provider, model: r.model });
+    }
+    modelsByConv.set(r.conversation_id, list);
   }
 
   return convs.map((c) => {
@@ -125,6 +149,7 @@ export async function listConversationsForUser(opts: {
       provider: string | null;
       model: string | null;
       project_id: string | null;
+      pinned: boolean;
       created_at: string;
       updated_at: string;
       projects: { name: string } | null;
@@ -143,6 +168,9 @@ export async function listConversationsForUser(opts: {
         (messageCost.get(row.id) ?? 0) + (responseCost.get(row.id) ?? 0),
       created_at: row.created_at,
       updated_at: row.updated_at,
+      pinned: row.pinned ?? false,
+      round_count: (roundMax.get(row.id) ?? 0) + 1,
+      models: modelsByConv.get(row.id) ?? [],
     };
   });
 }

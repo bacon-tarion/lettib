@@ -1,22 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createXai } from "@ai-sdk/xai";
-import { createGroq } from "@ai-sdk/groq";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers/models";
+import {
+  createServerGroqModel,
+  GROQ_SERVER_MODEL,
+} from "@/lib/providers/groq-server";
 import { SYNTHESIS_PROMPT } from "@/lib/prompts/synthesis";
 import {
   extractConflictsBlock,
   parseLineage,
 } from "@/lib/synthesis/lineage";
 import { logUsageAsync } from "@/lib/usage/log";
+import { processUploadedFile } from "@/lib/files/extract-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const SYNTH_PROVIDER = "groq";
 
 interface ManualResponseInput {
   source: string;
@@ -24,19 +26,10 @@ interface ManualResponseInput {
   content: string;
 }
 
-/** Map paste "Source" labels to API providers (only these may be used for synthesis). */
-const SOURCE_TO_API_PROVIDER: Record<
-  string,
-  "openai" | "anthropic" | "google" | "xai" | "groq" | undefined
-> = {
-  ChatGPT: "openai",
-  Claude: "anthropic",
-  Gemini: "google",
-  Grok: "xai",
-  Groq: "groq",
-  Perplexity: undefined,
-  Custom: undefined,
-};
+interface ImageContextInput {
+  name: string;
+  imageBase64: string;
+}
 
 const SOURCE_TO_SLUG: Record<string, string> = {
   ChatGPT: "gpt",
@@ -45,75 +38,22 @@ const SOURCE_TO_SLUG: Record<string, string> = {
   Grok: "grok",
   Groq: "groq",
   Perplexity: "perplexity",
+  File: "file",
+  Image: "image",
 };
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "source";
 }
 
-function calcCost(provider: string, model: string, tin: number, tout: number) {
+function calcCost(tin: number, tout: number) {
   const catalog = MODELS_CATALOG as Record<
     string,
     readonly { id: string; cost_in: number; cost_out: number }[]
   >;
-  const entry = catalog[provider]?.find((m) => m.id === model);
+  const entry = catalog[SYNTH_PROVIDER]?.find((m) => m.id === GROQ_SERVER_MODEL);
   if (!entry) return 0;
   return (entry.cost_in * tin) / 1_000_000 + (entry.cost_out * tout) / 1_000_000;
-}
-
-function defaultModelForProvider(provider: string): string {
-  const catalog = MODELS_CATALOG as Record<string, readonly { id: string }[]>;
-  const first = catalog[provider]?.[0];
-  if (!first) throw new Error(`No catalog model for provider: ${provider}`);
-  return first.id;
-}
-
-type ConnRow = {
-  provider: string;
-  vault_secret_id: string;
-  custom_base_url: string | null;
-  custom_model_name: string | null;
-};
-
-/** Unique API providers implied by the user's source labels, in first-appearance order. */
-function preferredApiProvidersFromResponses(
-  responses: ManualResponseInput[]
-): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const r of responses) {
-    const p = SOURCE_TO_API_PROVIDER[r.source];
-    if (!p) continue;
-    if (seen.has(p)) continue;
-    seen.add(p);
-    out.push(p);
-  }
-  return out;
-}
-
-async function buildModelInstance(
-  provider: string,
-  model: string,
-  apiKey: string,
-  baseUrl?: string | null
-) {
-  switch (provider) {
-    case "openai":
-      return createOpenAI({ apiKey })(model);
-    case "anthropic":
-      return createAnthropic({ apiKey })(model);
-    case "google":
-      return createGoogleGenerativeAI({ apiKey })(model);
-    case "xai":
-      return createXai({ apiKey })(model);
-    case "groq":
-      return createGroq({ apiKey })(model);
-    case "custom":
-      if (!baseUrl) throw new Error("baseUrl required for custom provider");
-      return createOpenAI({ apiKey, baseURL: baseUrl })(model);
-    default:
-      throw new Error(`Unsupported synthesis provider: ${provider}`);
-  }
 }
 
 function buildSlugs(items: ManualResponseInput[]): string[] {
@@ -146,32 +86,92 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = (await req.json().catch(() => ({}))) as {
-    prompt?: string;
-    responses?: ManualResponseInput[];
-    tone?: string;
-    project_id?: string | null;
-  };
+  const contentType = req.headers.get("content-type") ?? "";
+  let prompt = "";
+  let tone = "professional";
+  let projectId: string | null = null;
+  let responses: ManualResponseInput[] = [];
+  let imageContexts: ImageContextInput[] = [];
 
-  const prompt = (body.prompt ?? "").trim();
-  const tone = (body.tone ?? "professional").trim() || "professional";
-  const projectId = body.project_id ?? null;
-  const responses = (body.responses ?? []).filter(
+  if (contentType.includes("multipart/form-data")) {
+    const form = await req.formData();
+    prompt = (form.get("prompt") as string)?.trim() ?? "";
+    tone = ((form.get("tone") as string)?.trim() || "professional");
+    const pid = form.get("project_id");
+    projectId = typeof pid === "string" && pid.length > 0 ? pid : null;
+
+    const responsesRaw = form.get("responses");
+    if (typeof responsesRaw === "string") {
+      try {
+        responses = JSON.parse(responsesRaw) as ManualResponseInput[];
+      } catch (err) {
+        console.error("[manual-compare] invalid responses JSON:", err);
+        return NextResponse.json({ error: "Invalid responses payload" }, { status: 400 });
+      }
+    }
+
+    const fileEntries = form.getAll("files");
+    for (const entry of fileEntries) {
+      if (!(entry instanceof File) || entry.size === 0) continue;
+      try {
+        const processed = await processUploadedFile(entry);
+        if (processed.imageBase64) {
+          imageContexts.push({
+            name: processed.name,
+            imageBase64: processed.imageBase64,
+          });
+          responses.push({
+            source: "Image",
+            customName: processed.name,
+            content: `[Image attached: ${processed.name}]`,
+          });
+        } else if (processed.text) {
+          responses.push({
+            source: "File",
+            customName: processed.name,
+            content: processed.text,
+          });
+        }
+      } catch (err) {
+        console.error("[manual-compare] file processing failed:", err);
+        return NextResponse.json(
+          { error: err instanceof Error ? err.message : "File processing failed" },
+          { status: 400 }
+        );
+      }
+    }
+  } else {
+    const body = (await req.json().catch(() => ({}))) as {
+      prompt?: string;
+      responses?: ManualResponseInput[];
+      tone?: string;
+      project_id?: string | null;
+      images?: ImageContextInput[];
+    };
+
+    prompt = (body.prompt ?? "").trim();
+    tone = (body.tone ?? "professional").trim() || "professional";
+    projectId = body.project_id ?? null;
+    responses = body.responses ?? [];
+    imageContexts = body.images ?? [];
+  }
+
+  const filledResponses = responses.filter(
     (r) => r && typeof r.content === "string" && r.content.trim().length > 0
   );
 
   if (!prompt) {
     return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
   }
-  if (responses.length < 2) {
+  if (filledResponses.length < 2) {
     return NextResponse.json(
       { error: "At least 2 non-empty responses are required" },
       { status: 400 }
     );
   }
-  if (responses.length > 6) {
+  if (filledResponses.length > 8) {
     return NextResponse.json(
-      { error: "Maximum 6 responses allowed" },
+      { error: "Maximum 8 responses allowed (including uploaded files)" },
       { status: 400 }
     );
   }
@@ -185,10 +185,7 @@ export async function POST(req: NextRequest) {
       .eq("id", projectId)
       .maybeSingle();
     if (!proj || (proj as { user_id: string }).user_id !== user.id) {
-      return NextResponse.json(
-        { error: "Project not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
   }
 
@@ -196,134 +193,66 @@ export async function POST(req: NextRequest) {
   if (projectId) {
     const { data: project } = await serviceClient
       .from("projects")
-      .select("name, description")
+      .select("name, description, custom_instructions")
       .eq("id", projectId)
       .maybeSingle();
     if (project) {
-      projectContext = [
-        (project as { name: string }).name,
-        (project as { description: string | null }).description,
-      ]
-        .filter(Boolean)
-        .join(" — ");
+      const p = project as {
+        name: string;
+        description: string | null;
+        custom_instructions: string | null;
+      };
+      const parts = [p.name, p.description, p.custom_instructions].filter(Boolean);
+      projectContext = parts.join(" — ");
     }
   }
 
-  const { data: connections } = await serviceClient
-    .from("api_connections")
-    .select("provider, vault_secret_id, custom_base_url, custom_model_name")
-    .eq("user_id", user.id)
-    .in("status", ["connected", "untested"]);
-
-  const connByProvider = new Map<string, ConnRow>();
-  for (const c of (connections ?? []) as ConnRow[]) {
-    connByProvider.set(c.provider, c);
-  }
-
-  const preferred = preferredApiProvidersFromResponses(responses);
-  if (preferred.length === 0) {
-    return NextResponse.json(
-      {
-        error:
-          "Label at least one pasted response as ChatGPT, Claude, Gemini, Grok, or Groq so we can use your matching API connection for synthesis (Custom / Perplexity alone cannot pick a provider).",
-      },
-      { status: 400 }
-    );
-  }
-
-  let synthProvider: string | null = null;
-  let synthConn: ConnRow | null = null;
-  for (const p of preferred) {
-    const row = connByProvider.get(p);
-    if (row) {
-      synthProvider = p;
-      synthConn = row;
-      break;
-    }
-  }
-
-  if (!synthProvider || !synthConn) {
-    const need = preferred
-      .map((p) =>
-        p === "openai"
-          ? "OpenAI (ChatGPT)"
-          : p === "anthropic"
-            ? "Anthropic (Claude)"
-            : p === "google"
-              ? "Google (Gemini)"
-              : p === "xai"
-                ? "xAI (Grok)"
-                : p === "groq"
-                  ? "Groq"
-                  : p
-      )
-      .join(", ");
-    return NextResponse.json(
-      {
-        error: `No connected API key for your labeled sources. Connect one of: ${need} in Settings, then try again.`,
-      },
-      { status: 400 }
-    );
-  }
-
-  const synthModel =
-    synthProvider === "custom"
-      ? synthConn.custom_model_name || "custom"
-      : defaultModelForProvider(synthProvider);
-
-  const { data: vaultKey, error: vaultError } = await serviceClient.rpc(
-    "lettib_read_secret",
-    { p_secret_id: synthConn.vault_secret_id }
-  );
-  if (vaultError || !vaultKey) {
-    return NextResponse.json(
-      { error: "Could not read API key for synthesis. Re-save your connection in Settings." },
-      { status: 500 }
-    );
-  }
-  const apiKey =
-    typeof vaultKey === "string" ? vaultKey.trim() : String(vaultKey).trim();
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "Stored API key is empty. Update your connection in Settings." },
-      { status: 500 }
-    );
-  }
-
-  const slugs = buildSlugs(responses);
-  const sourceSlugList = responses
+  const slugs = buildSlugs(filledResponses);
+  const sourceSlugList = filledResponses
     .map((r, i) => `- ${slugs[i]}  (pasted from ${displayName(r)})`)
     .join("\n");
-  const formattedResponses = responses
+  const formattedResponses = filledResponses
     .map(
       (r, i) =>
         `### Response ${i + 1} — slug: ${slugs[i]} (${displayName(r)})\n${r.content.trim()}`
     )
     .join("\n\n");
 
-  const filledPrompt = SYNTHESIS_PROMPT.replace("{{question}}", prompt)
-    .replace("{{project_context}}", projectContext)
-    .replace("{{tone}}", tone)
-    .replace("{{source_slugs}}", sourceSlugList)
-    .replace("{{responses}}", formattedResponses);
+  let imageBlock = "";
+  if (imageContexts.length > 0) {
+    imageBlock =
+      "\n\nAttached images for visual context:\n" +
+      imageContexts.map((img) => `- ${img.name}`).join("\n");
+  }
+
+  const filledPrompt =
+    SYNTHESIS_PROMPT.replace("{{question}}", prompt)
+      .replace("{{project_context}}", projectContext)
+      .replace("{{tone}}", tone)
+      .replace("{{source_slugs}}", sourceSlugList)
+      .replace("{{responses}}", formattedResponses) + imageBlock;
 
   try {
+    const model = createServerGroqModel(GROQ_SERVER_MODEL);
     const startedAt = Date.now();
-    const model = await buildModelInstance(
-      synthProvider,
-      synthModel,
-      apiKey,
-      synthConn.custom_base_url
-    );
+
+    type ContentPart =
+      | { type: "text"; text: string }
+      | { type: "image"; image: string };
+
+    const contentParts: ContentPart[] = [{ type: "text", text: filledPrompt }];
+    for (const img of imageContexts) {
+      contentParts.push({ type: "image", image: img.imageBase64 });
+    }
 
     const result = await generateText({
       model,
-      messages: [{ role: "user", content: filledPrompt }],
+      messages: [{ role: "user", content: contentParts }],
     });
 
     const tokensIn = result.usage?.promptTokens ?? 0;
     const tokensOut = result.usage?.completionTokens ?? 0;
-    const cost = calcCost(synthProvider, synthModel, tokensIn, tokensOut);
+    const cost = calcCost(tokensIn, tokensOut);
     const latency = Date.now() - startedAt;
 
     const { conflicts, bodyWithoutBlock } = extractConflictsBlock(result.text);
@@ -337,8 +266,8 @@ export async function POST(req: NextRequest) {
         project_id: projectId,
         prompt,
         content: bodyWithoutBlock,
-        provider: synthProvider,
-        model: synthModel,
+        provider: SYNTH_PROVIDER,
+        model: GROQ_SERVER_MODEL,
         tone,
         tokens_in: tokensIn,
         tokens_out: tokensOut,
@@ -353,6 +282,7 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (synthError || !synthRow) {
+      console.error("[manual-compare] save synthesis failed:", synthError);
       return NextResponse.json(
         { error: synthError?.message ?? "Failed to save synthesis" },
         { status: 500 }
@@ -363,8 +293,8 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       conversationId: null,
       action: "synthesis_manual",
-      provider: synthProvider,
-      model: synthModel,
+      provider: SYNTH_PROVIDER,
+      model: GROQ_SERVER_MODEL,
       tokensIn,
       tokensOut,
       costUsd: cost,
@@ -376,6 +306,7 @@ export async function POST(req: NextRequest) {
       synthesis_id: (synthRow as { id: string }).id,
     });
   } catch (err) {
+    console.error("[manual-compare] synthesis failed:", err);
     const message = err instanceof Error ? err.message : "Synthesis failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }

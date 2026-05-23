@@ -3,25 +3,12 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { calcCompareModelCost } from "@/lib/compare/cost";
 import { logUsageAsync } from "@/lib/usage/log";
+import { saveCompareSnapshot } from "@/lib/compare/snapshots";
+import { triggerMemoryExtractionAsync } from "@/lib/memory/extract-async";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * Persist a Compare round.
- *
- * Session 11 (Compare Workspace v2): this route NO LONGER runs the
- * scoring pass. Grading is now strictly opt-in via /api/compare/score so
- * Compare doesn't charge users for an evaluation pass on every round.
- *
- * Two paths:
- *   1. `existingConversationId` is set — POST /api/compare already
- *      streamed and inserted `model_responses` rows. This branch is now
- *      almost a no-op: it just verifies ownership and returns the
- *      row IDs the client needs for "Use in Synthesis" selection.
- *   2. Legacy / manual-compare callers send raw rows here for insert.
- *      We still support this path so /manual-compare keeps working.
- */
 type ResponsePayload = {
   key: string;
   provider: string;
@@ -31,9 +18,45 @@ type ResponsePayload = {
   tokens_out: number;
   latency_ms: number;
   error?: string | null;
-  /** Matches model_responses.position (required when positions are not 0..n-1). */
   position?: number;
 };
+
+function finalizeCompareRound(opts: {
+  userId: string;
+  conversationId: string;
+  projectId: string | null;
+  prompt: string;
+  responses: ResponsePayload[];
+  roundNumber?: number;
+}) {
+  if (typeof opts.roundNumber === "number") {
+    void saveCompareSnapshot({
+      userId: opts.userId,
+      comparisonId: opts.conversationId,
+      roundNumber: opts.roundNumber,
+      snapshotData: {
+        prompt: opts.prompt,
+        responses: opts.responses,
+        saved_at: new Date().toISOString(),
+      },
+    });
+  }
+
+  if (opts.projectId) {
+    const content = [
+      `Prompt: ${opts.prompt}`,
+      ...opts.responses.map(
+        (r) => `${r.provider}/${r.model}: ${r.content?.slice(0, 2000) ?? ""}`
+      ),
+    ].join("\n\n");
+    triggerMemoryExtractionAsync({
+      userId: opts.userId,
+      projectId: opts.projectId,
+      conversationId: opts.conversationId,
+      content,
+    });
+  }
+}
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -51,11 +74,13 @@ export async function POST(req: NextRequest) {
     project_id,
     responses,
     conversation_id: existingConversationId,
+    round_number: roundNumber,
   } = body as {
     prompt: string;
     project_id?: string | null;
     responses: ResponsePayload[];
     conversation_id?: string | null;
+    round_number?: number;
   };
 
   if (!prompt || !Array.isArray(responses) || responses.length === 0) {
@@ -67,11 +92,10 @@ export async function POST(req: NextRequest) {
 
   const serviceClient = createServiceClient();
 
-  // ── Already-persisted path: just verify ownership + return ids ───────────
   if (existingConversationId) {
     const { data: conv, error: convErr } = await serviceClient
       .from("conversations")
-      .select("id, user_id, mode")
+      .select("id, user_id, mode, project_id")
       .eq("id", existingConversationId)
       .single();
 
@@ -82,7 +106,10 @@ export async function POST(req: NextRequest) {
       );
     }
     if ((conv as { mode: string }).mode !== "compare") {
-      return NextResponse.json({ error: "Not a compare conversation" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Not a compare conversation" },
+        { status: 400 }
+      );
     }
 
     const { data: existingRows, error: rowsErr } = await serviceClient
@@ -109,6 +136,18 @@ export async function POST(req: NextRequest) {
       if (row) responseIds.push({ key: resp.key, id: row.id });
     }
 
+    finalizeCompareRound({
+      userId: user.id,
+      conversationId: existingConversationId,
+      projectId:
+        project_id ??
+        (conv as { project_id: string | null }).project_id ??
+        null,
+      prompt,
+      responses,
+      roundNumber,
+    });
+
     return NextResponse.json({
       success: true,
       conversation_id: existingConversationId,
@@ -116,7 +155,6 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // ── Legacy / manual-compare path: create conversation + rows ─────────────
   let resolvedProjectId: string | null = null;
   if (project_id) {
     const { data: ownedProject } = await serviceClient
@@ -132,18 +170,9 @@ export async function POST(req: NextRequest) {
       );
     }
     resolvedProjectId = (ownedProject as { id: string }).id;
-  } else {
-    const { data: inbox } = await serviceClient
-      .from("projects")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("name", "Inbox")
-      .limit(1)
-      .maybeSingle();
-    resolvedProjectId = (inbox as { id: string } | null)?.id ?? null;
   }
 
-  const title = prompt.trim().slice(0, 80);
+  const title = prompt.trim().slice(0, 60);
 
   const { data: conv, error: convError } = await serviceClient
     .from("conversations")
@@ -246,6 +275,15 @@ export async function POST(req: NextRequest) {
     const id = insertedByPosition.get(pos);
     if (id) responseIds.push({ key: resp.key, id });
   }
+
+  finalizeCompareRound({
+    userId: user.id,
+    conversationId,
+    projectId: resolvedProjectId,
+    prompt,
+    responses,
+    roundNumber: roundNumber ?? 0,
+  });
 
   return NextResponse.json({
     success: true,

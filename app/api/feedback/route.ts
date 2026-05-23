@@ -48,6 +48,7 @@ export async function POST(req: NextRequest) {
     page,
   });
   if (error) {
+    console.error("[feedback] insert failed:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
   return NextResponse.json({ ok: true });

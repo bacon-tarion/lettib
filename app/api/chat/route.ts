@@ -3,6 +3,10 @@ import { CoreMessage } from "ai";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { streamChat } from "@/lib/providers";
+import {
+  fetchGroqKeyForUser,
+  streamWebSearchChatResponse,
+} from "@/lib/providers/web-search-stream";
 import { MODELS_CATALOG } from "@/lib/providers/models";
 import { MEMORY_INJECTION_PROMPT } from "@/lib/prompts/synthesis";
 import { logUsageAsync } from "@/lib/usage/log";
@@ -79,6 +83,10 @@ export async function POST(req: NextRequest) {
     project_id?: unknown;
     conversation_id?: unknown;
     tone?: unknown;
+    web_search?: unknown;
+    file_context?: unknown;
+    images?: unknown;
+    project_file_ids?: unknown;
   };
   try {
     body = await req.json();
@@ -102,7 +110,20 @@ export async function POST(req: NextRequest) {
       ? body.conversation_id
       : null;
   const tone = typeof body.tone === "string" ? body.tone : null;
-  const messages = body.messages;
+  const webSearch = body.web_search === true;
+  const fileContext =
+    typeof body.file_context === "string" ? body.file_context : "";
+  const images = Array.isArray(body.images)
+    ? (body.images as { name?: string; imageBase64?: string }[]).filter(
+        (i) => i?.imageBase64
+      )
+    : [];
+  const projectFileIds = Array.isArray(body.project_file_ids)
+    ? (body.project_file_ids as unknown[]).filter(
+        (id): id is string => typeof id === "string" && id.length > 0
+      )
+    : [];
+  let messages = body.messages as CoreMessage[];
 
   if (!isValidMessages(messages) || !provider || !model) {
     return new Response(
@@ -193,9 +214,15 @@ export async function POST(req: NextRequest) {
   if (projectId) {
     const { data: project } = await supabase
       .from("projects")
-      .select("memory_enabled")
+      .select("memory_enabled, custom_instructions")
       .eq("id", projectId)
       .single();
+
+    if (project?.custom_instructions) {
+      systemPrompt =
+        `Project custom instructions:\n${project.custom_instructions}\n\n` +
+        systemPrompt;
+    }
 
     if (project?.memory_enabled) {
       const { data: memory } = await supabase
@@ -237,13 +264,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Inject project files (text-extracted at upload time, capped per-file).
-    const { data: pf } = await serviceClient
+    // Inject selected or all project files
+    let fileQuery = serviceClient
       .from("project_files")
-      .select("file_name, extracted_text")
+      .select("id, file_name, extracted_text")
       .eq("project_id", projectId)
       .eq("user_id", user.id)
       .not("extracted_text", "is", null);
+    if (projectFileIds.length > 0) {
+      fileQuery = fileQuery.in("id", projectFileIds);
+    }
+    const { data: pf } = await fileQuery;
     const fileRows = (pf ?? []) as { file_name: string; extracted_text: string }[];
     if (fileRows.length > 0) {
       const filesBlock = fileRows
@@ -253,8 +284,106 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  if (fileContext && messages.length > 0) {
+    const lastIdx = messages.length - 1;
+    const last = messages[lastIdx];
+    if (last && last.role === "user") {
+      const base =
+        typeof last.content === "string"
+          ? last.content
+          : Array.isArray(last.content)
+            ? last.content
+                .filter((p) => p.type === "text")
+                .map((p) => (p as { text: string }).text)
+                .join("\n")
+            : "";
+      messages = [
+        ...messages.slice(0, lastIdx),
+        { ...last, content: base + fileContext },
+      ];
+    }
+  }
+
+  if (images.length > 0 && messages.length > 0) {
+    const lastIdx = messages.length - 1;
+    const last = messages[lastIdx];
+    if (last && last.role === "user") {
+      type Part =
+        | { type: "text"; text: string }
+        | { type: "image"; image: string };
+      const parts: Part[] = [
+        {
+          type: "text",
+          text:
+            typeof last.content === "string"
+              ? last.content
+              : "See attached images.",
+        },
+      ];
+      for (const img of images) {
+        if (img.imageBase64) {
+          parts.push({ type: "image", image: img.imageBase64 });
+        }
+      }
+      messages = [...messages.slice(0, lastIdx), { ...last, content: parts }];
+    }
+  }
+
   try {
     const startedAt = Date.now();
+    const streamHeaders = {
+      "X-Conversation-Id": conversationId || "",
+      "X-Project-Id": projectId || "",
+      "X-Provider": provider,
+      "X-Model": model,
+    };
+
+    if (webSearch) {
+      const groqApiKey =
+        provider === "xai"
+          ? await fetchGroqKeyForUser(serviceClient, user.id)
+          : null;
+      const onFinish = (usage: {
+        promptTokens?: number;
+        completionTokens?: number;
+      }) => {
+        logUsageAsync(serviceClient, {
+          userId: user.id,
+          conversationId,
+          action: "chat",
+          provider,
+          model,
+          tokensIn: usage.promptTokens,
+          tokensOut: usage.completionTokens,
+          latencyMs: Date.now() - startedAt,
+        });
+        logUsageAsync(serviceClient, {
+          userId: user.id,
+          conversationId,
+          action: "web_search",
+          provider,
+          model,
+          tokensIn: 0,
+          tokensOut: 0,
+          costUsd: 0,
+          latencyMs: 0,
+        });
+      };
+
+      return await streamWebSearchChatResponse(
+        {
+          provider,
+          model,
+          apiKey: trimmedKey,
+          groqApiKey,
+          messages,
+          systemPrompt: systemPrompt || undefined,
+          onFinish,
+        },
+        streamHeaders
+      );
+    }
+
     const result = await streamChat({
       provider,
       model,

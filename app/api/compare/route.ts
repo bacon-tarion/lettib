@@ -8,6 +8,15 @@ import { MAX_COMPARE_PARALLEL_MODELS } from "@/lib/compare/constants";
 import { MODELS_CATALOG } from "@/lib/providers/models";
 import { calcCompareModelCost } from "@/lib/compare/cost";
 import { logUsageAsync } from "@/lib/usage/log";
+import {
+  getUserSubscription,
+  maxCompareModelsForUser,
+  compareModelLimitError,
+} from "@/lib/subscription/tier";
+import {
+  isGroqCompoundModel,
+  streamGroqCompoundText,
+} from "@/lib/providers/groq-compound";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -176,6 +185,7 @@ export async function POST(req: NextRequest) {
     retry_position,
     compare_follow_up: rawFollowUp,
     ask_model: rawAskModel,
+    web_search: rawWebSearch,
   } = body as {
     prompt?: string;
     project_id?: string | null;
@@ -185,7 +195,10 @@ export async function POST(req: NextRequest) {
     compare_follow_up?: boolean;
     /** Session 11: per-model branch — one model, isolated thread context. */
     ask_model?: boolean;
+    web_search?: boolean;
   };
+
+  const webSearchEnabled = rawWebSearch === true;
 
   const modelIds = normalizeModelIds(body.model_ids);
   if (!prompt?.trim() || !modelIds) {
@@ -247,6 +260,18 @@ export async function POST(req: NextRequest) {
   }
 
   const serviceClient = createServiceClient();
+
+  const { subscription_tier } = await getUserSubscription(user.id);
+  const tierMax = maxCompareModelsForUser(subscription_tier);
+  if (!isRetry && modelIds.length > tierMax) {
+    return new Response(
+      JSON.stringify({
+        error: compareModelLimitError(subscription_tier),
+        max_models: tierMax,
+      }),
+      { status: 403 }
+    );
+  }
 
   if (!isRetry && modelIds.length > MAX_COMPARE_PARALLEL_MODELS) {
     return new Response(
@@ -345,24 +370,20 @@ export async function POST(req: NextRequest) {
       );
     }
     resolvedProjectId = (ownedProject as { id: string }).id;
-  } else {
-    const { data: inbox } = await serviceClient
-      .from("projects")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("name", "Inbox")
-      .limit(1)
-      .maybeSingle();
-    resolvedProjectId = (inbox as { id: string } | null)?.id ?? null;
   }
 
   let systemPrompt = tone ? (TONE_MAP[tone] ?? "") : "";
   if (project_id && resolvedProjectId) {
     const { data: project } = await supabase
       .from("projects")
-      .select("memory_enabled")
+      .select("memory_enabled, custom_instructions")
       .eq("id", project_id)
       .single();
+    if (project?.custom_instructions) {
+      systemPrompt =
+        `Project custom instructions:\n${project.custom_instructions}\n\n` +
+        systemPrompt;
+    }
     if (project?.memory_enabled) {
       const { data: memory } = await supabase
         .from("project_memory")
@@ -834,6 +855,27 @@ export async function POST(req: NextRequest) {
             });
             tokensIn = usage.inputTokens;
             tokensOut = usage.outputTokens;
+          } else if (
+            spec.provider === "groq" &&
+            (isGroqCompoundModel(spec.model) ||
+              (webSearchEnabled && spec.provider === "groq"))
+          ) {
+            const compoundModel =
+              webSearchEnabled && !isGroqCompoundModel(spec.model)
+                ? "groq/compound"
+                : spec.model;
+            const usage = await streamGroqCompoundText({
+              apiKey,
+              model: compoundModel,
+              userContent,
+              systemPrompt: systemPrompt || undefined,
+              onText: (chunk) => {
+                accumulated += chunk;
+                enqueue({ type: "chunk", key, text: chunk });
+              },
+            });
+            tokensIn = usage.inputTokens;
+            tokensOut = usage.outputTokens;
           } else {
             const result = await streamChat({
               provider: spec.provider as
@@ -895,12 +937,26 @@ export async function POST(req: NextRequest) {
             costUsd: cost_usd,
             latencyMs: latency_ms,
           });
+          if (webSearchEnabled) {
+            logUsageAsync(serviceClient, {
+              userId: user.id,
+              conversationId,
+              action: "web_search",
+              provider: spec.provider,
+              model: spec.model,
+              tokensIn: 0,
+              tokensOut: 0,
+              costUsd: 0,
+              latencyMs: 0,
+            });
+          }
         };
 
         try {
           await work();
         } catch (err) {
           const message = err instanceof Error ? err.message : "Stream failed";
+          console.error("[compare] lane failed:", key, err);
           enqueue({ type: "error", key, error: message });
           await persistAndEmitSaved(key, spec, position, {
             content: accumulated,

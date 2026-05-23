@@ -11,6 +11,7 @@ export type ChatProject = {
   name: string;
   default_chat_provider?: string | null;
   default_chat_model?: string | null;
+  custom_instructions?: string | null;
 };
 
 export type ChatConnection = {
@@ -32,7 +33,7 @@ export default async function ChatPage() {
   const [{ data: projects }, { data: connections }] = await Promise.all([
     supabase
       .from("projects")
-      .select("id, name, default_chat_provider, default_chat_model")
+      .select("id, name, default_chat_provider, default_chat_model, custom_instructions")
       .eq("user_id", user.id)
       .eq("archived", false)
       .order("pinned", { ascending: false })

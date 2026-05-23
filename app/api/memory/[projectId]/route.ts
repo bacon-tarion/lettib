@@ -4,6 +4,7 @@ import {
   loadProjectMemory,
   upsertMemoryFields,
 } from "@/lib/memory/queries";
+import { createServiceClient } from "@/lib/supabase/service";
 import { isMemoryFieldKey, type MemoryFieldKey } from "@/lib/memory/fields";
 
 export const runtime = "nodejs";
@@ -58,10 +59,50 @@ export async function PATCH(
   }
 
   const updates: Partial<Record<MemoryFieldKey, string | null>> = {};
+  let contentUpdate: string | undefined;
   for (const [k, v] of Object.entries(body)) {
+    if (k === "content" && typeof v === "string") {
+      contentUpdate = v;
+      continue;
+    }
     if (isMemoryFieldKey(k) && (typeof v === "string" || v === null)) {
       updates[k] = v;
     }
+  }
+
+  if (contentUpdate !== undefined) {
+    const sc = createServiceClient();
+    const { data, error } = await sc
+      .from("project_memory")
+      .upsert(
+        {
+          project_id: project.id,
+          user_id: user.id,
+          content: contentUpdate,
+        },
+        { onConflict: "project_id" }
+      )
+      .select("*")
+      .single();
+    if (error) {
+      console.error("[memory] content update failed:", error);
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ memory: data });
+    }
+  }
+
+  if (Object.keys(updates).length === 0 && contentUpdate === undefined) {
+    return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
+  }
+
+  if (Object.keys(updates).length === 0) {
+    const { memory } = await loadProjectMemory({
+      userId: user.id,
+      projectId: project.id,
+    });
+    return NextResponse.json({ memory });
   }
 
   const result = await upsertMemoryFields({

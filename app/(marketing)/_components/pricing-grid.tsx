@@ -37,7 +37,13 @@ async function startCheckout(plan: PaidCheckoutPlan) {
   }
 }
 
-export function PricingGrid() {
+export function PricingGrid({
+  dark = false,
+  currentTier,
+}: {
+  dark?: boolean;
+  currentTier?: string;
+}) {
   const [loadingPlan, setLoadingPlan] = useState<PaidCheckoutPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,9 +59,17 @@ export function PricingGrid() {
           <Card
             key={p.name}
             className={
-              p.highlight
+              currentTier &&
+              ((p.paidCheckoutPlan === "pro" && currentTier === "pro") ||
+                (p.paidCheckoutPlan === "power" && currentTier === "power") ||
+                (p.paidCheckoutPlan === "lifetime_byok" &&
+                  currentTier === "lifetime_byok"))
+                ? "border-primary shadow-md relative ring-2 ring-primary"
+                : p.highlight
                 ? "border-primary shadow-md relative"
-                : "border-border/60"
+                : dark
+                  ? "border-zinc-800 bg-zinc-900/40"
+                  : "border-border/60"
             }
           >
             {p.highlight && (

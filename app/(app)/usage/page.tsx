@@ -5,18 +5,10 @@ import { createClient } from "@/lib/supabase/server";
 import { getUserUsageSummary } from "@/lib/usage/queries";
 import { getModelDisplayName, getProviderLabel } from "@/lib/providers/models";
 import { LiveUsageDashboard } from "@/components/usage/live-usage-dashboard";
+import { UsageLiveMetricsSection } from "@/components/usage/usage-live-metrics";
 import { UsageWidgetErrorBoundary } from "@/components/usage/usage-error-boundary";
 
 export const dynamic = "force-dynamic";
-
-const PROVIDER_BG: Record<string, string> = {
-  openai: "bg-blue-500",
-  anthropic: "bg-amber-500",
-  google: "bg-green-500",
-  xai: "bg-purple-500",
-  custom: "bg-gray-500",
-  unknown: "bg-zinc-400",
-};
 
 const ACTION_LABEL: Record<string, string> = {
   chat: "Chat",
@@ -47,10 +39,6 @@ export default async function UsagePage() {
   const summary = await getUserUsageSummary();
   if (!summary) redirect("/login");
 
-  const maxProviderCost = Math.max(
-    0.0001,
-    ...summary.by_provider.map((p) => p.cost_usd)
-  );
   const maxDayCost = Math.max(0.0001, ...summary.by_day.map((d) => d.cost_usd));
   const hasAny = summary.total_cost_usd > 0 || summary.total_tokens > 0;
 
@@ -67,32 +55,7 @@ export default async function UsagePage() {
         <LiveUsageDashboard />
       </UsageWidgetErrorBoundary>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader className="pb-1 pt-4">
-            <CardTitle className="text-xs text-muted-foreground font-medium">
-              Total tokens (all time)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold tabular-nums">
-              {fmtNumber(summary.total_tokens)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-1 pt-4">
-            <CardTitle className="text-xs text-muted-foreground font-medium">
-              Total cost (all time)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold tabular-nums">
-              {fmtMoney(summary.total_cost_usd, 4)}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      <UsageLiveMetricsSection initialSummary={summary} />
 
       <p className="text-[11px] text-muted-foreground">
         Want toasts at a different cadence?{" "}
@@ -112,39 +75,6 @@ export default async function UsagePage() {
           </CardContent>
         </Card>
       )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-semibold">By provider</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {summary.by_provider.length === 0 && (
-            <p className="text-xs text-muted-foreground">No data.</p>
-          )}
-          {summary.by_provider.map((p) => {
-            const pct = (p.cost_usd / maxProviderCost) * 100;
-            const color = PROVIDER_BG[p.provider] ?? "bg-zinc-400";
-            return (
-              <div key={p.provider} className="space-y-1">
-                <div className="flex items-baseline justify-between text-xs">
-                  <span className="font-medium">
-                    {getProviderLabel(p.provider)}
-                  </span>
-                  <span className="text-muted-foreground tabular-nums">
-                    {fmtNumber(p.tokens)} tok · {fmtMoney(p.cost_usd, 4)}
-                  </span>
-                </div>
-                <div className="h-2 rounded bg-muted overflow-hidden">
-                  <div
-                    className={`h-full ${color}`}
-                    style={{ width: `${Math.max(2, pct)}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>

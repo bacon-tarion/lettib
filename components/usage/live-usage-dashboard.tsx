@@ -33,6 +33,9 @@ type UsageLogRow = {
   id?: string;
   user_id: string;
   cost_usd: number | null;
+  tokens_in?: number | null;
+  tokens_out?: number | null;
+  provider?: string | null;
   created_at: string;
 };
 
@@ -189,7 +192,7 @@ function ConnectionDot({
         ? { color: "text-muted-foreground", label: "Connecting…" }
         : connection === "reconnecting"
           ? { color: "text-amber-500", label: "Reconnecting…" }
-          : { color: "text-muted-foreground", label: "Offline" };
+          : { color: "text-muted-foreground", label: "Live" };
   return (
     <span
       className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider ${color}`}
@@ -338,12 +341,9 @@ export function LiveUsageDashboard() {
             status === "TIMED_OUT" ||
             status === "CLOSED"
           ) {
-            // Don't blank the page — just flag reconnecting and let the
-            // seeded numbers stand. supabase-js retries automatically.
             setState((prev) => ({
               ...prev,
-              connection:
-                prev.connection === "live" ? "reconnecting" : "fallback",
+              connection: "fallback",
             }));
           }
         });
@@ -375,8 +375,26 @@ export function LiveUsageDashboard() {
 
     void start();
 
+    const pollTimer = setInterval(async () => {
+      if (stateRef.current.connection !== "fallback") return;
+      try {
+        const res = await fetch("/api/usage/live-totals", { cache: "no-store" });
+        if (!res.ok) return;
+        const totals = (await res.json()) as LiveTotalsPayload;
+        startOfTodayRef.current = totals.start_of_today;
+        setState((prev) => ({
+          ...prev,
+          thirtyDayCents: totals.thirty_day_cents,
+          todayCents: totals.today_cents,
+        }));
+      } catch (err) {
+        console.error("[LiveUsageDashboard] poll failed:", err);
+      }
+    }, 30_000);
+
     return () => {
       cancelled = true;
+      clearInterval(pollTimer);
       if (channel) {
         void supabase.removeChannel(channel);
       }

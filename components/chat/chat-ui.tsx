@@ -28,7 +28,21 @@ import {
   type CompareToChatHandoff,
 } from "@/lib/compare/to-chat-handoff";
 import { RestoreSessionBanner } from "@/components/session/restore-session-banner";
+import {
+  useWebSearchPreference,
+  WebSearchToggle,
+} from "@/components/web-search/toggle";
 import { LETTIB_STATE_CHAT, SESSION_STATE_TTL_MS } from "@/lib/session/keys";
+import {
+  FileAttachments,
+  type AttachedFile,
+  buildFileContextText,
+  getImageAttachments,
+} from "@/components/chat/file-attachments";
+import {
+  ChatOrganizer,
+  STANDALONE_PROJECT_VALUE,
+} from "@/components/chat/chat-organizer";
 
 /** Survives React Strict Mode remount so Compare→Chat handoff is not lost after first read. */
 const compareHandoffByNonce = new Map<string, CompareToChatHandoff>();
@@ -141,17 +155,22 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
   const defaultModel = modelOptions[0];
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
-    projects[0]?.id ?? ""
+    STANDALONE_PROJECT_VALUE
   );
   const [selectedModelValue, setSelectedModelValue] = useState<string>(
     defaultModel?.value ?? ""
   );
   const [selectedTone, setSelectedTone] = useState("professional");
+  const [webSearchEnabled, setWebSearchEnabled] = useWebSearchPreference();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messageUsage, setMessageUsage] = useState<Map<string, UsageInfo>>(
     new Map()
   );
   const [showRestoreBanner, setShowRestoreBanner] = useState(false);
+  const [loadingConversation, setLoadingConversation] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [showOrganizer, setShowOrganizer] = useState(false);
+  const [selectedProjectFileIds, setSelectedProjectFileIds] = useState<string[]>([]);
 
   const conversationIdRef = useRef<string | null>(null);
   const lastUserInputRef = useRef<string>("");
@@ -159,12 +178,68 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
   const startTimeRef = useRef<number>(0);
   const sessionHydratedRef = useRef(false);
   const urlConversationAttemptedRef = useRef(false);
+  const dbHydratedConversationRef = useRef<string | null>(null);
+
+  async function hydrateConversationFromDb(cid: string, showBanner: boolean) {
+    if (dbHydratedConversationRef.current === cid) return;
+    setLoadingConversation(true);
+    try {
+      const res = await fetch(`/api/conversations/${cid}`);
+      if (!res.ok) {
+        console.error("[chat] failed to load conversation:", cid, res.status);
+        return;
+      }
+      const data = (await res.json()) as {
+        conversation: {
+          mode: string;
+          project_id: string | null;
+          provider: string | null;
+          model: string | null;
+        };
+        messages: { id: string; role: string; content: string }[];
+      };
+      if (data.conversation.mode !== "chat") return;
+
+      const msgs: Message[] = (data.messages ?? [])
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        }));
+
+      setMessages(msgs);
+      setConversationId(cid);
+      dbHydratedConversationRef.current = cid;
+      if (
+        data.conversation.project_id &&
+        projects.some((p) => p.id === data.conversation.project_id)
+      ) {
+        setSelectedProjectId(data.conversation.project_id);
+      } else if (!data.conversation.project_id) {
+        setSelectedProjectId(STANDALONE_PROJECT_VALUE);
+      }
+      const pv =
+        data.conversation.provider && data.conversation.model
+          ? `${data.conversation.provider}::${data.conversation.model}`
+          : null;
+      if (pv && modelOptions.some((o) => o.value === pv)) {
+        setSelectedModelValue(pv);
+      }
+      if (showBanner) setShowRestoreBanner(true);
+    } catch (err) {
+      console.error("[chat] hydrateConversationFromDb error:", err);
+    } finally {
+      setLoadingConversation(false);
+    }
+  }
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
 
   useEffect(() => {
+    if (selectedProjectId === STANDALONE_PROJECT_VALUE) return;
     const p = projects.find((x) => x.id === selectedProjectId);
     if (!p?.default_chat_provider || !p?.default_chat_model) return;
     const v = `${p.default_chat_provider}::${p.default_chat_model}`;
@@ -175,6 +250,16 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
   const parsedModel = selectedModelValue.split("::");
   const selectedProvider = parsedModel[0] ?? "";
   const selectedModel = parsedModel[1] ?? "";
+
+  function resolveProjectIdForApi(): string | null {
+    return selectedProjectId === STANDALONE_PROJECT_VALUE
+      ? null
+      : selectedProjectId;
+  }
+
+  const isStandalone =
+    selectedProjectId === STANDALONE_PROJECT_VALUE ||
+    !selectedProjectId;
 
   const { messages, input, handleInputChange, handleSubmit, isLoading, setMessages } =
     useChat({
@@ -215,7 +300,7 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 conversation_id: conversationIdRef.current,
-                project_id: selectedProjectId,
+                project_id: resolveProjectIdForApi(),
                 messages: [
                   { role: "user", content: lastUserInputRef.current },
                   { role: "assistant", content: message.content },
@@ -230,14 +315,26 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
             const data = await res.json();
             if (data.conversation_id && !conversationIdRef.current) {
               setConversationId(data.conversation_id);
+              if (isStandalone) setShowOrganizer(true);
             }
-          } catch {
-            // save failures are non-fatal
+          } catch (err) {
+            console.error("[chat] save failed:", err);
           }
         },
-        [selectedProvider, selectedModel, selectedProjectId]
+        [selectedProvider, selectedModel, selectedProjectId, isStandalone]
       ),
     });
+
+  useEffect(() => {
+    const projectParam = searchParams.get("project");
+    if (projectParam && projects.some((p) => p.id === projectParam)) {
+      setSelectedProjectId(projectParam);
+      setConversationId(null);
+      setMessages([]);
+      sessionHydratedRef.current = true;
+      router.replace("/chat");
+    }
+  }, [searchParams, projects, router, setMessages]);
 
   useEffect(() => {
     if (searchParams.get("fromCompare") === "1") return;
@@ -247,54 +344,11 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
     sessionHydratedRef.current = true;
 
     void (async () => {
-      try {
-        const res = await fetch(`/api/conversations/${cid}`);
-        if (!res.ok) {
-          return;
-        }
-        const data = (await res.json()) as {
-          conversation: {
-            mode: string;
-            project_id: string | null;
-            provider: string | null;
-            model: string | null;
-          };
-          messages: { id: string; role: string; content: string }[];
-        };
-        if (data.conversation.mode !== "chat") {
-          return;
-        }
-
-        const msgs: Message[] = (data.messages ?? [])
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({
-            id: m.id,
-            role: m.role as "user" | "assistant",
-            content: m.content,
-          }));
-
-        setMessages(msgs);
-        setConversationId(cid);
-        if (
-          data.conversation.project_id &&
-          projects.some((p) => p.id === data.conversation.project_id)
-        ) {
-          setSelectedProjectId(data.conversation.project_id);
-        }
-        const pv =
-          data.conversation.provider && data.conversation.model
-            ? `${data.conversation.provider}::${data.conversation.model}`
-            : null;
-        if (pv && modelOptions.some((o) => o.value === pv)) {
-          setSelectedModelValue(pv);
-        }
-        setShowRestoreBanner(true);
-        router.replace("/chat");
-      } catch {
-        /* ignore */
-      }
+      sessionHydratedRef.current = true;
+      await hydrateConversationFromDb(cid, true);
+      router.replace("/chat");
     })();
-  }, [searchParams, router, setMessages, projects, modelOptions]);
+  }, [searchParams, router, projects, modelOptions]);
 
   useEffect(() => {
     if (searchParams.get("fromCompare") !== "1") return;
@@ -413,6 +467,9 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
       }
       setConversationId(p.conversationId ?? null);
       setShowRestoreBanner(true);
+      if (p.conversationId) {
+        void hydrateConversationFromDb(p.conversationId, false);
+      }
     } catch {
       try {
         sessionStorage.removeItem(LETTIB_STATE_CHAT);
@@ -463,22 +520,31 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
     setSelectedProjectId(value);
     setConversationId(null);
     setMessages([]);
+    setShowOrganizer(false);
+    setSelectedProjectFileIds([]);
   }
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
-    lastUserInputRef.current = input;
+    const fileContext = buildFileContextText(attachedFiles);
+    lastUserInputRef.current = input.trim() + fileContext;
     startTimeRef.current = Date.now();
     handleSubmit(e, {
       body: {
-        project_id: selectedProjectId,
+        project_id: resolveProjectIdForApi(),
         conversation_id: conversationIdRef.current,
         provider: selectedProvider,
         model: selectedModel,
         tone: selectedTone,
+        web_search: webSearchEnabled,
+        file_context: fileContext || undefined,
+        images: getImageAttachments(attachedFiles),
+        project_file_ids:
+          selectedProjectFileIds.length > 0 ? selectedProjectFileIds : undefined,
       },
     });
+    setAttachedFiles([]);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -528,10 +594,13 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
       <div className="flex gap-2 flex-wrap mb-4 shrink-0">
         {projects.length > 0 && (
           <Select value={selectedProjectId} onValueChange={onProjectChange}>
-            <SelectTrigger className="w-40 h-8 text-xs">
+            <SelectTrigger className="w-44 h-8 text-xs">
               <SelectValue placeholder="Project" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value={STANDALONE_PROJECT_VALUE} className="text-xs">
+                No project (standalone)
+              </SelectItem>
               {projects.map((p) => (
                 <SelectItem key={p.id} value={p.id} className="text-xs">
                   {p.name}
@@ -570,7 +639,12 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
 
       {/* Message thread */}
       <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-1">
-        {messages.length === 0 && (
+        {loadingConversation && messages.length === 0 && (
+          <div className="flex items-center justify-center h-full text-center">
+            <p className="text-muted-foreground text-sm">Loading conversation…</p>
+          </div>
+        )}
+        {!loadingConversation && messages.length === 0 && (
           <div className="flex items-center justify-center h-full text-center">
             <div>
               <p className="text-muted-foreground text-sm">
@@ -672,11 +746,37 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
       </div>
 
       {/* Input area */}
+      {showOrganizer && isStandalone && conversationId && messages.length >= 2 && (
+        <ChatOrganizer
+          conversationId={conversationId}
+          projects={projects}
+          onDismiss={() => setShowOrganizer(false)}
+        />
+      )}
       <form onSubmit={onSubmit} className="shrink-0 space-y-2">
+        <WebSearchToggle
+          enabled={webSearchEnabled}
+          onChange={setWebSearchEnabled}
+        />
+        <FileAttachments
+          files={attachedFiles}
+          onChange={setAttachedFiles}
+          disabled={isLoading}
+          selectedModelId={selectedModel}
+          showButton={false}
+        />
         <div className="relative">
+          <FileAttachments
+            files={attachedFiles}
+            onChange={setAttachedFiles}
+            disabled={isLoading}
+            selectedModelId={selectedModel}
+            showChips={false}
+            className="absolute left-1 bottom-1 z-10"
+          />
           <Textarea
             placeholder="Ask anything… (⌘Enter to send)"
-            className="resize-none pr-12 min-h-[80px]"
+            className="resize-none pr-12 pl-10 min-h-[80px]"
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}

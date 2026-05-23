@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { signOut } from "@/app/actions/auth";
 import { FeedbackButton } from "@/components/feedback/feedback-button";
+import { SidebarChats } from "@/components/layout/sidebar-chats";
 
 const navItems = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
@@ -65,6 +66,7 @@ export function Sidebar({ userEmail }: SidebarProps) {
             </Link>
           );
         })}
+        <SidebarChats />
       </nav>
 
       <div className="p-4 border-t space-y-1">

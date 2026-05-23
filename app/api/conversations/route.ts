@@ -16,12 +16,18 @@ export async function GET(req: NextRequest) {
   }
 
   const projectId = req.nextUrl.searchParams.get("project_id");
+  const standalone = req.nextUrl.searchParams.get("standalone") === "true";
+  const modeParam = req.nextUrl.searchParams.get("mode");
+  const mode =
+    modeParam === "chat" || modeParam === "compare" ? modeParam : undefined;
   const limitParam = req.nextUrl.searchParams.get("limit");
   const limit = limitParam ? Math.min(parseInt(limitParam, 10) || 50, 200) : undefined;
 
   const conversations = await listConversationsForUser({
     userId: user.id,
-    projectId,
+    projectId: standalone ? undefined : projectId,
+    standalone,
+    mode,
     limit,
   });
 

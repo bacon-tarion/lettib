@@ -37,10 +37,50 @@ export default async function ProjectsPage() {
   ]);
 
   const teamNameById = new Map(teams.map((t) => [t.id, t.name]));
-  const enriched = (projects ?? []).map((p) => {
-    const tid = (p as { default_team_id?: string | null }).default_team_id;
+  const projectRows = projects ?? [];
+  const projectIds = projectRows.map((p) => (p as { id: string }).id);
+
+  const chatCountByProject = new Map<string, number>();
+  const synthCountByProject = new Map<string, number>();
+
+  if (projectIds.length > 0) {
+    const [{ data: chatRows }, { data: synthRows }] = await Promise.all([
+      serviceClient
+        .from("conversations")
+        .select("project_id")
+        .eq("user_id", user.id)
+        .eq("mode", "chat")
+        .is("deleted_at", null)
+        .in("project_id", projectIds),
+      serviceClient
+        .from("syntheses")
+        .select("project_id")
+        .eq("user_id", user.id)
+        .in("project_id", projectIds),
+    ]);
+
+    for (const row of chatRows ?? []) {
+      const pid = (row as { project_id: string | null }).project_id;
+      if (!pid) continue;
+      chatCountByProject.set(pid, (chatCountByProject.get(pid) ?? 0) + 1);
+    }
+    for (const row of synthRows ?? []) {
+      const pid = (row as { project_id: string | null }).project_id;
+      if (!pid) continue;
+      synthCountByProject.set(pid, (synthCountByProject.get(pid) ?? 0) + 1);
+    }
+  }
+
+  const enriched = projectRows.map((p) => {
+    const row = p as {
+      id: string;
+      default_team_id?: string | null;
+    };
+    const tid = row.default_team_id;
     return {
       ...p,
+      chat_count: chatCountByProject.get(row.id) ?? 0,
+      synthesis_count: synthCountByProject.get(row.id) ?? 0,
       default_team_display: tid ? teamNameById.get(tid) ?? undefined : undefined,
     };
   });

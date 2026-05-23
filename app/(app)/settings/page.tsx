@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 import { listApiKeys, getUsageAlertThresholdCents } from "./actions";
 import { SettingsContent } from "./settings-content";
 
@@ -12,10 +13,21 @@ export default async function SettingsPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const [connections, thresholdCents] = await Promise.all([
+  const [connections, thresholdCents, profileRes] = await Promise.all([
     listApiKeys(),
     getUsageAlertThresholdCents(),
+    createServiceClient()
+      .from("profiles")
+      .select("subscription_tier, subscription_status, current_period_end")
+      .eq("id", user.id)
+      .maybeSingle(),
   ]);
+
+  const profile = profileRes.data as {
+    subscription_tier: string;
+    subscription_status: string;
+    current_period_end: string | null;
+  } | null;
 
   const userEmail = user.email ?? "";
   const userName =
@@ -29,6 +41,9 @@ export default async function SettingsPage() {
       userEmail={userEmail}
       userName={userName}
       initialUsageAlertThresholdCents={thresholdCents}
+      subscriptionTier={profile?.subscription_tier ?? "free"}
+      subscriptionStatus={profile?.subscription_status ?? "active"}
+      currentPeriodEnd={profile?.current_period_end ?? null}
     />
   );
 }

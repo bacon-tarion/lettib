@@ -13,7 +13,7 @@ type ProjectFile = {
   created_at: string;
 };
 
-const ALLOWED = ".pdf,.txt,.md,.docx,.csv,.json";
+const ALLOWED = ".pdf,.txt,.md,.docx,.csv,.json,.png,.jpg,.jpeg,.webp,.gif";
 
 function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;

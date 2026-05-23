@@ -13,6 +13,7 @@ import { ApiKeyTile } from "@/components/settings/api-key-tile";
 import type { ApiConnection } from "./actions";
 import { updateUsageAlertThresholdCents } from "./actions";
 import { PRICING_USD } from "@/lib/pricing";
+import { tierDisplayName } from "@/lib/subscription/tier";
 
 // Per-provider config. `consoleUrl` points at each provider's API-key
 // dashboard; the tile renders a small "Get your API key →" link out to it
@@ -75,6 +76,9 @@ interface SettingsContentProps {
   userName: string;
   /** Per-user 30-day spend-alert step in cents (default 1000 = $10). */
   initialUsageAlertThresholdCents: number;
+  subscriptionTier?: string;
+  subscriptionStatus?: string;
+  currentPeriodEnd?: string | null;
 }
 
 export function SettingsContent({
@@ -82,6 +86,9 @@ export function SettingsContent({
   userEmail,
   userName,
   initialUsageAlertThresholdCents,
+  subscriptionTier = "free",
+  subscriptionStatus = "active",
+  currentPeriodEnd = null,
 }: SettingsContentProps) {
   const router = useRouter();
   const [connections, setConnections] = useState(initialConnections);
@@ -96,6 +103,28 @@ export function SettingsContent({
   const [thresholdError, setThresholdError] = useState<string | null>(null);
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [thresholdSaving, startThresholdSave] = useTransition();
+  const [portalLoading, setPortalLoading] = useState(false);
+
+  async function openPortal() {
+    setPortalLoading(true);
+    try {
+      const res = await fetch("/api/stripe/portal");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Portal failed");
+      if (data.url) window.location.href = data.url;
+    } catch (err) {
+      console.error("[settings] portal failed:", err);
+    } finally {
+      setPortalLoading(false);
+    }
+  }
+
+  const tierLabel = tierDisplayName(subscriptionTier);
+  const isLifetime = subscriptionTier === "lifetime_byok";
+  const isPaid =
+    subscriptionTier === "pro" ||
+    subscriptionTier === "power" ||
+    isLifetime;
 
   // Sync when the server re-renders after router.refresh()
   useEffect(() => {
@@ -264,25 +293,66 @@ export function SettingsContent({
 
         {/* ── Subscription ── */}
         <TabsContent value="subscription" className="mt-4 space-y-4">
-          <div className="flex items-center gap-3">
-            <Badge className="text-sm px-3 py-1">Free during beta</Badge>
+          <div className="flex items-center gap-3 flex-wrap">
+            <Badge className="text-sm px-3 py-1">{tierLabel}</Badge>
+            {isLifetime && (
+              <Badge variant="secondary" className="text-sm px-3 py-1">
+                Lifetime member
+              </Badge>
+            )}
+            {isPaid && !isLifetime && (
+              <span className="text-xs text-muted-foreground capitalize">
+                Status: {subscriptionStatus}
+              </span>
+            )}
           </div>
+          {currentPeriodEnd && !isLifetime && (
+            <p className="text-sm text-muted-foreground">
+              Current period ends{" "}
+              {new Date(currentPeriodEnd).toLocaleDateString(undefined, {
+                dateStyle: "medium",
+              })}
+            </p>
+          )}
           <p className="text-sm text-muted-foreground">
-            Full access to all features while LettiB is in beta. When billing is
-            live, plans are{" "}
-            {`Free ($${PRICING_USD.free} forever), Pro ($${PRICING_USD.proMonthly}/month), Power ($${PRICING_USD.powerMonthly}/month), and Lifetime BYOK ($${PRICING_USD.lifetimeByok} one-time).`}{" "}
-            See the{" "}
+            Plans: Free (${PRICING_USD.free}), Pro (${PRICING_USD.proMonthly}
+            /mo), Power (${PRICING_USD.powerMonthly}/mo), Lifetime BYOK ($
+            {PRICING_USD.lifetimeByok} one-time). See{" "}
             <Link
               href="/pricing"
               className="text-foreground underline underline-offset-4 hover:text-primary"
             >
-              pricing page
-            </Link>{" "}
-            for details.
+              pricing
+            </Link>
+            .
           </p>
-          <Button variant="outline" asChild>
-            <Link href="/pricing">View plans</Link>
-          </Button>
+          <div className="flex gap-2 flex-wrap">
+            {!isPaid && (
+              <Button variant="default" asChild>
+                <Link href="/pricing">Upgrade</Link>
+              </Button>
+            )}
+            {isPaid && !isLifetime && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={portalLoading}
+                onClick={() => void openPortal()}
+              >
+                {portalLoading ? "Opening…" : "Manage subscription"}
+              </Button>
+            )}
+            {isPaid && (
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={portalLoading}
+                onClick={() => void openPortal()}
+              >
+                Billing history
+              </Button>
+            )}
+          </div>
         </TabsContent>
 
         {/* ── Privacy ── */}

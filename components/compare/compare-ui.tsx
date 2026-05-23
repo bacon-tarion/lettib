@@ -34,7 +34,22 @@ import {
 } from "@/lib/compare/view-snapshot";
 import { RestoreSessionBanner } from "@/components/session/restore-session-banner";
 import { cn } from "@/lib/utils";
+import { CompareHistorySidebar } from "@/components/compare/compare-history-sidebar";
+import {
+  useWebSearchPreference,
+  WebSearchToggle,
+} from "@/components/web-search/toggle";
 import type { CompareProject, CompareConnection } from "@/app/(app)/compare/page";
+import { STANDALONE_PROJECT_VALUE } from "@/components/chat/chat-organizer";
+import {
+  FileAttachments,
+  type AttachedFile,
+  buildFileContextText,
+} from "@/components/chat/file-attachments";
+
+function resolveCompareProjectId(selected: string): string | null {
+  return !selected || selected === STANDALONE_PROJECT_VALUE ? null : selected;
+}
 
 const TONES = [
   { value: "professional", label: "Professional" },
@@ -158,8 +173,9 @@ export function CompareUI({
   const modelPicks = useMemo(() => buildModelPicks(connections), [connections]);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
-    projects[0]?.id ?? ""
+    STANDALONE_PROJECT_VALUE
   );
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [selectedTone, setSelectedTone] = useState<string>("professional");
   const [prompt, setPrompt] = useState("");
   const [followUpPrompt, setFollowUpPrompt] = useState("");
@@ -182,6 +198,10 @@ export function CompareUI({
     is_free_tier: boolean;
     blocked: boolean;
   } | null>(null);
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState<string | null>(null);
+  const [titleEditing, setTitleEditing] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useWebSearchPreference();
   const [selectedValues, setSelectedValues] = useState<Set<string>>(() => {
     const s = new Set<string>();
     for (let i = 0; i < Math.min(MAX_COMPARE_PARALLEL_MODELS, modelPicks.length); i++) {
@@ -236,6 +256,14 @@ export function CompareUI({
     () => rounds.flatMap((x) => x.responses),
     [rounds]
   );
+
+  useEffect(() => {
+    const projectParam = searchParams.get("project");
+    if (projectParam && projects.some((p) => p.id === projectParam)) {
+      setSelectedProjectId(projectParam);
+      router.replace("/compare");
+    }
+  }, [searchParams, projects, router]);
 
   useEffect(() => {
     roundsRef.current = rounds;
@@ -402,6 +430,7 @@ export function CompareUI({
         }
 
         setConversationId(data.conversation.id);
+        setSessionTitle(data.conversation.title ?? null);
         setRounds(built);
         setPrompt(built[0]?.prompt ?? "");
         setContinueByModelKey(seenContinue);
@@ -800,6 +829,9 @@ export function CompareUI({
       return;
     }
 
+    const effectivePrompt = prompt.trim() + buildFileContextText(attachedFiles);
+    setAttachedFiles([]);
+
     try {
       clearCompareSnapshotStorage();
     } catch {
@@ -842,7 +874,7 @@ export function CompareUI({
       responseId: null,
     }));
     const r0: CompareRound[] = [
-      { prompt: prompt.trim(), responses: initial, kind: "main" },
+      { prompt: effectivePrompt, responses: initial, kind: "main" },
     ];
     roundsRef.current = r0;
     setRounds(r0);
@@ -856,10 +888,11 @@ export function CompareUI({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt,
+          prompt: effectivePrompt,
           model_ids,
-          project_id: selectedProjectId || null,
+          project_id: resolveCompareProjectId(selectedProjectId),
           tone: selectedTone,
+          web_search: webSearchEnabled,
         }),
         signal: controller.signal,
       });
@@ -899,7 +932,10 @@ export function CompareUI({
     setMainBatchStreaming(false);
 
     setPhase("saving");
-    await persistRoundAndAttachIds(streamedConversationId ?? null, 0);
+    await persistRoundAndAttachIds(
+      streamedConversationId ?? conversationId ?? null,
+      0
+    );
     setPhase("done");
   }
 
@@ -928,7 +964,9 @@ export function CompareUI({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           conversation_id: streamedConvId ?? conversationId ?? undefined,
+          project_id: resolveCompareProjectId(selectedProjectId),
           prompt: savePrompt,
+          round_number: idx,
           responses: saveRows.map((r) => ({
             key: r.key,
             position: r.position,
@@ -1069,6 +1107,7 @@ export function CompareUI({
     const controller = new AbortController();
     mainBatchAbortRef.current = controller;
 
+    let activeConversationId = conversationId;
     let res: Response;
     try {
       res = await fetch("/api/compare", {
@@ -1077,10 +1116,11 @@ export function CompareUI({
         body: JSON.stringify({
           prompt: followUpPrompt.trim(),
           model_ids,
-          project_id: selectedProjectId || null,
+          project_id: resolveCompareProjectId(selectedProjectId),
           tone: selectedTone,
           conversation_id: conversationId,
           compare_follow_up: true,
+          web_search: webSearchEnabled,
         }),
         signal: controller.signal,
       });
@@ -1111,6 +1151,7 @@ export function CompareUI({
 
     await consumeSseStream(res, {
       onMeta: (id) => {
+        activeConversationId = id;
         setConversationId(id);
       },
       abortedMessage:
@@ -1119,9 +1160,17 @@ export function CompareUI({
     mainBatchAbortRef.current = null;
     setMainBatchStreaming(false);
 
-    await persistRoundAndAttachIds(null, followUpRoundIndex);
-    setFollowUpPrompt("");
-    setFollowUpInFlight(false);
+    try {
+      await persistRoundAndAttachIds(activeConversationId, followUpRoundIndex);
+      setFollowUpPrompt("");
+    } catch (err) {
+      console.error("[compare-ui] follow-up persist failed:", err);
+      setGlobalError(
+        err instanceof Error ? err.message : "Follow-up save failed"
+      );
+    } finally {
+      setFollowUpInFlight(false);
+    }
   }
 
   /**
@@ -1188,7 +1237,7 @@ export function CompareUI({
         body: JSON.stringify({
           prompt: branchPrompt.trim(),
           model_ids: [{ provider, model: modelId }],
-          project_id: selectedProjectId || null,
+          project_id: resolveCompareProjectId(selectedProjectId),
           tone: selectedTone,
           conversation_id: conversationId,
           ask_model: true,
@@ -1272,7 +1321,7 @@ export function CompareUI({
         body: JSON.stringify({
           prompt: roundPrompt,
           model_ids: [{ provider: r.provider, model: r.model }],
-          project_id: selectedProjectId || null,
+          project_id: resolveCompareProjectId(selectedProjectId),
           tone: selectedTone,
           conversation_id: conversationId,
           retry_position: r.position,
@@ -1377,7 +1426,7 @@ export function CompareUI({
           comparison_id: conversationId,
           conversation_id: conversationId,
           tone: selectedTone,
-          project_id: selectedProjectId || null,
+          project_id: resolveCompareProjectId(selectedProjectId),
           source_response_ids: sourceIds,
         }),
       });
@@ -1600,9 +1649,45 @@ export function CompareUI({
   }
 
   return (
+    <div className="flex min-h-[calc(100vh-4rem)] -mx-4 md:-mx-6">
+      <CompareHistorySidebar
+        activeId={conversationId}
+        collapsed={historyCollapsed}
+        onToggleCollapsed={() => setHistoryCollapsed((v) => !v)}
+      />
+      <div className="flex-1 min-w-0 overflow-auto px-4 md:px-6 py-6">
     <div className="space-y-6 max-w-7xl">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold">Compare</h1>
+        {conversationId && sessionTitle ? (
+          titleEditing ? (
+            <input
+              className="text-2xl font-bold bg-transparent border-b outline-none min-w-[12rem]"
+              value={sessionTitle}
+              onChange={(e) => setSessionTitle(e.target.value)}
+              onBlur={async () => {
+                setTitleEditing(false);
+                if (!conversationId || !sessionTitle?.trim()) return;
+                await fetch(`/api/conversations/${conversationId}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ title: sessionTitle.trim() }),
+                });
+              }}
+              autoFocus
+            />
+          ) : (
+            <button
+              type="button"
+              className="text-2xl font-bold text-left hover:opacity-80"
+              onClick={() => setTitleEditing(true)}
+              title="Click to rename"
+            >
+              {sessionTitle}
+            </button>
+          )
+        ) : (
+          <h1 className="text-2xl font-bold">Compare</h1>
+        )}
         <div className="flex items-center gap-2 flex-wrap justify-end">
           {latestSynthesisId && (
             <Button asChild variant="default" size="sm" className="gap-1.5">
@@ -1671,10 +1756,13 @@ export function CompareUI({
       <div className="flex gap-2 flex-wrap items-center">
         {projects.length > 0 && (
           <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
-            <SelectTrigger className="w-40 h-8 text-xs">
+            <SelectTrigger className="w-44 h-8 text-xs">
               <SelectValue placeholder="Project" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value={STANDALONE_PROJECT_VALUE} className="text-xs">
+                No project (standalone)
+              </SelectItem>
               {projects.map((p) => (
                 <SelectItem key={p.id} value={p.id} className="text-xs">
                   {p.name}
@@ -1761,13 +1849,33 @@ export function CompareUI({
         </div>
       </div>
 
-      <Textarea
-        placeholder="Enter your prompt — it will run on every selected model in parallel…"
-        className="resize-none min-h-[100px]"
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        disabled={phase === "streaming" || phase === "saving"}
+      <WebSearchToggle
+        enabled={webSearchEnabled}
+        onChange={setWebSearchEnabled}
+        className="mb-1"
       />
+      <FileAttachments
+        files={attachedFiles}
+        onChange={setAttachedFiles}
+        disabled={phase === "streaming" || phase === "saving"}
+        showButton={false}
+      />
+      <div className="relative">
+        <FileAttachments
+          files={attachedFiles}
+          onChange={setAttachedFiles}
+          disabled={phase === "streaming" || phase === "saving"}
+          showChips={false}
+          className="absolute left-1 bottom-1 z-10"
+        />
+        <Textarea
+          placeholder="Enter your prompt — it will run on every selected model in parallel…"
+          className="resize-none min-h-[100px] pl-10"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          disabled={phase === "streaming" || phase === "saving"}
+        />
+      </div>
 
       <div className="flex items-center gap-3 flex-wrap">
         <Button
@@ -2073,6 +2181,8 @@ export function CompareUI({
           )}
         </div>
       )}
+    </div>
+      </div>
     </div>
   );
 }

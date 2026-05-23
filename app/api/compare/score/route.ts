@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getServerApiKey } from "@/lib/providers";
 import { buildScoringMessage } from "@/lib/prompts/scoring";
+import { generateAnthropicText } from "@/lib/providers/anthropic-generate";
 import { logUsageAsync } from "@/lib/usage/log";
 
 export const runtime = "nodejs";
@@ -253,21 +254,40 @@ export async function POST(req: NextRequest) {
   let scoringError: string | null = null;
 
   try {
-    const languageModel = await buildLanguageModel(
-      scorerProvider,
-      scorerModel,
-      apiKey,
-      baseUrl
-    );
-
     const startedAt = Date.now();
-    const result = await generateText({
-      model: languageModel,
-      messages: [{ role: "user", content: scoringMessage }],
-    });
+    let jsonText = "";
+    let tokens_in = 0;
+    let tokens_out = 0;
+
+    if (scorerProvider === "anthropic") {
+      // Omit temperature entirely — Opus 4.x rejects the parameter and the
+      // AI SDK defaults to temperature: 0 for all generateText calls.
+      const anthropicResult = await generateAnthropicText({
+        apiKey,
+        model: scorerModel,
+        userContent: scoringMessage,
+      });
+      jsonText = anthropicResult.text.trim();
+      tokens_in = anthropicResult.inputTokens;
+      tokens_out = anthropicResult.outputTokens;
+    } else {
+      const languageModel = await buildLanguageModel(
+        scorerProvider,
+        scorerModel,
+        apiKey,
+        baseUrl
+      );
+      const result = await generateText({
+        model: languageModel,
+        messages: [{ role: "user", content: scoringMessage }],
+      });
+      jsonText = result.text.trim();
+      tokens_in = result.usage?.promptTokens ?? 0;
+      tokens_out = result.usage?.completionTokens ?? 0;
+    }
+
     const latency_ms = Date.now() - startedAt;
 
-    let jsonText = result.text.trim();
     const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (fenceMatch) jsonText = fenceMatch[1].trim();
 
@@ -293,8 +313,6 @@ export async function POST(req: NextRequest) {
 
     // Log the grading pass as its own usage event so spend dashboards
     // attribute the cost correctly (it does not count as a Compare call).
-    const tokens_in = result.usage?.promptTokens ?? 0;
-    const tokens_out = result.usage?.completionTokens ?? 0;
     logUsageAsync(serviceClient, {
       userId: user.id,
       conversationId,
@@ -306,6 +324,7 @@ export async function POST(req: NextRequest) {
       latencyMs: latency_ms,
     });
   } catch (err) {
+    console.error("[compare/score] grading failed:", err);
     scoringError = err instanceof Error ? err.message : "Scoring failed";
   }
 

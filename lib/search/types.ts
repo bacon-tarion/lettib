@@ -15,6 +15,8 @@ export interface SearchResult {
   project_name?: string | null;
   updated_at?: string | null;
   rank?: number | null;
+  /** chat | compare — only set for conversation results */
+  mode?: string | null;
 }
 
 export interface GroupedSearchResults {
@@ -30,7 +32,8 @@ export function hrefForResult(r: SearchResult): string {
     case "project":
       return `/projects/${r.id}`;
     case "conversation":
-      return `/chat/${r.id}`;
+      if (r.mode === "compare") return `/compare?c=${r.id}`;
+      return `/chat?conversation=${r.id}`;
     case "synthesis":
       return `/synthesis/${r.id}`;
     default:
@@ -73,6 +76,7 @@ export function normaliseRow(raw: unknown): SearchResult | null {
         : r.rank == null
           ? null
           : Number(r.rank),
+    mode: typeof r.mode === "string" ? r.mode : null,
   };
 }
 

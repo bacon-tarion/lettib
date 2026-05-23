@@ -107,7 +107,11 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const updates: { project_id?: string | null; title?: string } = {};
+  const updates: {
+    project_id?: string | null;
+    title?: string;
+    pinned?: boolean;
+  } = {};
 
   if ("project_id" in body) {
     const newProjectId = body.project_id as string | null;
@@ -140,6 +144,10 @@ export async function PATCH(
       );
     }
     updates.title = trimmed;
+  }
+
+  if ("pinned" in body && typeof body.pinned === "boolean") {
+    updates.pinned = body.pinned;
   }
 
   if (Object.keys(updates).length === 0) {

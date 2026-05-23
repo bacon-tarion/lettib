@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, X, Loader2, Sparkles, ArrowRight } from "lucide-react";
+import { Plus, X, Loader2, Sparkles, ArrowRight, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,6 +19,12 @@ import {
   LETTIB_STATE_MANUAL_COMPARE,
   SESSION_STATE_TTL_MS,
 } from "@/lib/session/keys";
+import {
+  FileAttachments,
+  type AttachedFile,
+  buildFileContextText,
+  getImageAttachments,
+} from "@/components/chat/file-attachments";
 
 const SOURCE_OPTIONS = [
   { value: "ChatGPT", label: "ChatGPT" },
@@ -26,10 +32,7 @@ const SOURCE_OPTIONS = [
   { value: "Gemini", label: "Gemini" },
   { value: "Grok", label: "Grok" },
   { value: "Groq", label: "Groq" },
-  {
-    value: "Perplexity",
-    label: "Perplexity — paste only (no API connection)",
-  },
+  { value: "Perplexity", label: "Perplexity" },
   { value: "Custom", label: "Custom" },
 ] as const;
 
@@ -82,6 +85,7 @@ export default function ManualComparePage() {
     newBox("ChatGPT"),
     newBox("Claude"),
   ]);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRestoreBanner, setShowRestoreBanner] = useState(false);
@@ -147,25 +151,46 @@ export default function ManualComparePage() {
   }
 
   const filledBoxes = boxes.filter((b) => b.content.trim().length > 0);
+  const readyFiles = attachedFiles.filter((f) => f.status === "ready");
+  const fileSourcesCount = readyFiles.length;
+  const totalSources = filledBoxes.length + fileSourcesCount;
+  const filesProcessing = attachedFiles.some((f) => f.status === "processing");
+
   const canSubmit =
-    prompt.trim().length > 0 && filledBoxes.length >= MIN_BOXES && !submitting;
+    prompt.trim().length > 0 &&
+    totalSources >= MIN_BOXES &&
+    !submitting &&
+    !filesProcessing;
 
   async function handleSynthesize() {
     if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
     try {
+      const fileContext = buildFileContextText(attachedFiles);
+      const fileResponses = readyFiles
+        .filter((f) => f.text)
+        .map((f) => ({
+          source: "File" as const,
+          customName: f.name,
+          content: f.text!,
+        }));
+
       const res = await fetch("/api/manual-compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: prompt.trim(),
+          prompt: prompt.trim() + fileContext,
           tone,
-          responses: filledBoxes.map((b) => ({
-            source: b.source,
-            customName: b.source === "Custom" ? b.customName.trim() : undefined,
-            content: b.content.trim(),
-          })),
+          responses: [
+            ...filledBoxes.map((b) => ({
+              source: b.source,
+              customName: b.source === "Custom" ? b.customName.trim() : undefined,
+              content: b.content.trim(),
+            })),
+            ...fileResponses,
+          ],
+          images: getImageAttachments(attachedFiles),
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -174,13 +199,14 @@ export default function ManualComparePage() {
       }
       router.push(`/synthesis/${json.synthesis_id}`);
     } catch (e) {
+      console.error("[manual-compare] synthesize failed:", e);
       setError(e instanceof Error ? e.message : "Synthesis failed");
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-8">
       {showRestoreBanner && (
         <RestoreSessionBanner
           onDismiss={() => {
@@ -196,9 +222,9 @@ export default function ManualComparePage() {
       <div className="space-y-1">
         <h1 className="text-3xl font-bold tracking-tight">Manual Compare</h1>
         <p className="text-muted-foreground">
-          Paste outputs from any assistant. Synthesis runs through your connected
-          API that matches the source you pick (e.g. Claude → Anthropic, Groq →
-          Groq). Perplexity is paste-only — no API connection in Settings.
+          Paste outputs from any assistant — no API keys required. Synthesis runs
+          on LettiB&apos;s built-in Groq model (Llama 3.3 70B). Upload files or
+          images as additional sources.
         </p>
       </div>
 
@@ -214,28 +240,41 @@ export default function ManualComparePage() {
       </div>
 
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Pasted responses ({filledBoxes.length} / {boxes.length})
+            Pasted responses ({totalSources} sources)
           </h2>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={addBox}
-            disabled={boxes.length >= MAX_BOXES}
-            className="gap-1.5"
-          >
-            <Plus className="h-4 w-4" />
-            Add Model
-          </Button>
+          <div className="flex gap-2">
+            <FileAttachments
+              files={attachedFiles}
+              onChange={setAttachedFiles}
+              disabled={submitting}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={addBox}
+              disabled={boxes.length >= MAX_BOXES}
+              className="gap-1.5"
+            >
+              <Plus className="h-4 w-4" />
+              Add Model
+            </Button>
+          </div>
         </div>
 
+        {attachedFiles.length > 0 && (
+          <div className="rounded-lg border border-dashed p-3 space-y-2">
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Upload className="h-3.5 w-3.5" />
+              Uploaded files count as additional model sources
+            </p>
+          </div>
+        )}
+
         {boxes.map((box, idx) => (
-          <div
-            key={box.id}
-            className="rounded-lg border bg-card p-4 space-y-3"
-          >
+          <div key={box.id} className="rounded-lg border bg-card p-4 space-y-3">
             <div className="flex items-start gap-3">
               <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
@@ -248,9 +287,7 @@ export default function ManualComparePage() {
                   <Select
                     value={box.source}
                     onValueChange={(v) =>
-                      patchBox(box.id, {
-                        source: v as SourceValue,
-                      })
+                      patchBox(box.id, { source: v as SourceValue })
                     }
                   >
                     <SelectTrigger id={`source-${box.id}`}>
@@ -316,9 +353,7 @@ export default function ManualComparePage() {
           <Label htmlFor="tone">Synthesis tone</Label>
           <Select
             value={tone}
-            onValueChange={(v) =>
-              setTone(v as (typeof TONE_OPTIONS)[number])
-            }
+            onValueChange={(v) => setTone(v as (typeof TONE_OPTIONS)[number])}
           >
             <SelectTrigger id="tone">
               <SelectValue />
@@ -334,9 +369,9 @@ export default function ManualComparePage() {
         </div>
 
         <div className="flex flex-col items-end gap-1">
-          {!canSubmit && filledBoxes.length < MIN_BOXES && (
+          {!canSubmit && totalSources < MIN_BOXES && (
             <p className="text-xs text-muted-foreground">
-              Paste at least {MIN_BOXES} responses to synthesize
+              Provide at least {MIN_BOXES} responses (paste or upload)
             </p>
           )}
           <Button

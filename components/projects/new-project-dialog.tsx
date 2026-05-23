@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
@@ -53,9 +53,10 @@ const initialState = {
 interface NewProjectDialogProps {
   teams: Team[];
   connections: ProjectConnection[];
+  trigger?: ReactNode;
 }
 
-export function NewProjectDialog({ teams, connections }: NewProjectDialogProps) {
+export function NewProjectDialog({ teams, connections, trigger }: NewProjectDialogProps) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
@@ -92,10 +93,12 @@ export function NewProjectDialog({ teams, connections }: NewProjectDialogProps) 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size="sm" className="gap-2">
-          <Plus className="h-4 w-4" />
-          New Project
-        </Button>
+        {trigger ?? (
+          <Button size="sm" className="gap-2">
+            <Plus className="h-4 w-4" />
+            New Project
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers";
+import { triggerMemoryExtractionAsync } from "@/lib/memory/extract-async";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,10 +69,13 @@ export async function POST(req: NextRequest) {
     typeof body.conversation_id === "string" && body.conversation_id.length > 0
       ? body.conversation_id
       : null;
-  const projectIdInput =
-    typeof body.project_id === "string" && body.project_id.length > 0
-      ? body.project_id
-      : null;
+  // null = standalone chat; string = project-scoped; undefined = standalone (default)
+  const projectIdInput: string | null | undefined =
+    body.project_id === null
+      ? null
+      : typeof body.project_id === "string" && body.project_id.length > 0
+        ? body.project_id
+        : undefined;
 
   if (!isValidMessages(messages) || !provider || !model) {
     return NextResponse.json(
@@ -114,7 +118,6 @@ export async function POST(req: NextRequest) {
   } else {
     let resolvedProjectId: string | null = null;
     if (projectIdInput) {
-      // Verify the user owns the destination project before parking the chat there.
       const { data: ownedProject } = await serviceClient
         .from("projects")
         .select("id")
@@ -128,17 +131,6 @@ export async function POST(req: NextRequest) {
         );
       }
       resolvedProjectId = (ownedProject as { id: string }).id;
-    }
-
-    if (!resolvedProjectId) {
-      const { data: inbox } = await serviceClient
-        .from("projects")
-        .select("id")
-        .eq("user_id", user.id)
-        .eq("name", "Inbox")
-        .limit(1)
-        .maybeSingle();
-      resolvedProjectId = (inbox as { id: string } | null)?.id ?? null;
     }
 
     const userMsg = messages.find((m) => m.role === "user");
@@ -181,6 +173,18 @@ export async function POST(req: NextRequest) {
     .insert(messagesToInsert);
   if (insertError) {
     return NextResponse.json({ error: insertError.message }, { status: 500 });
+  }
+
+  if (projectIdInput) {
+    const transcript = messages
+      .map((m) => `${m.role}: ${m.content}`)
+      .join("\n\n");
+    triggerMemoryExtractionAsync({
+      userId: user.id,
+      projectId: projectIdInput,
+      conversationId: convId,
+      content: transcript,
+    });
   }
 
   return NextResponse.json({ success: true, conversation_id: convId });

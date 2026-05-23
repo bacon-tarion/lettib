@@ -17,6 +17,9 @@ export type Project = {
   default_team_id?: string | null;
   default_chat_provider?: string | null;
   default_chat_model?: string | null;
+  custom_instructions?: string | null;
+  icon?: string | null;
+  color?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -103,6 +106,9 @@ export async function updateProject(
       | "default_team_id"
       | "default_chat_provider"
       | "default_chat_model"
+      | "custom_instructions"
+      | "icon"
+      | "color"
     >
   >
 ): Promise<{ error?: string }> {

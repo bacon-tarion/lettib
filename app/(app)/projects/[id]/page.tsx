@@ -19,7 +19,7 @@ export default async function ProjectPage({ params }: { params: { id: string } }
 
   const { data: row, error } = await supabase
     .from("projects")
-    .select("*")
+    .select("id, name, description, memory_enabled, default_team_id, default_chat_provider, default_chat_model, custom_instructions, icon, color")
     .eq("id", params.id)
     .eq("user_id", user.id)
     .maybeSingle();

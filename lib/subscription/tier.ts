@@ -1,0 +1,47 @@
+import { createServiceClient } from "@/lib/supabase/service";
+import { maxCompareModelsForSubscriptionTier } from "@/lib/pricing";
+
+export type UserSubscription = {
+  subscription_tier: string;
+  subscription_status: string;
+};
+
+export async function getUserSubscription(
+  userId: string
+): Promise<UserSubscription> {
+  const sc = createServiceClient();
+  const { data } = await sc
+    .from("profiles")
+    .select("subscription_tier, subscription_status")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const row = data as UserSubscription | null;
+  return {
+    subscription_tier: row?.subscription_tier ?? "free",
+    subscription_status: row?.subscription_status ?? "active",
+  };
+}
+
+export function maxCompareModelsForUser(tier: string | null | undefined): number {
+  return maxCompareModelsForSubscriptionTier(tier);
+}
+
+export function tierDisplayName(tier: string | null | undefined): string {
+  switch (tier) {
+    case "pro":
+      return "Pro";
+    case "power":
+      return "Power";
+    case "lifetime_byok":
+      return "Lifetime BYOK";
+    default:
+      return "Free";
+  }
+}
+
+export function compareModelLimitError(tier: string | null | undefined): string {
+  const name = tierDisplayName(tier);
+  const n = maxCompareModelsForUser(tier);
+  return `Your ${name} plan supports up to ${n} models. Upgrade to compare more.`;
+}

@@ -105,7 +105,7 @@ export function ChatViewerActions({
               <SelectValue placeholder="Choose a project…" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="none">No project (Inbox)</SelectItem>
+              <SelectItem value="none">Standalone (no project)</SelectItem>
               {projects.map((p) => (
                 <SelectItem key={p.id} value={p.id}>
                   {p.name}

@@ -32,6 +32,7 @@ export async function GET(req: NextRequest) {
   });
 
   if (error) {
+    console.error("[search] search_user_content failed:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 

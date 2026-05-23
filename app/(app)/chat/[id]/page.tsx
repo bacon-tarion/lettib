@@ -117,6 +117,10 @@ export default async function ChatViewerPage({
   };
   if (conv.deleted_at) notFound();
 
+  if (conv.mode === "chat") {
+    redirect(`/chat?conversation=${encodeURIComponent(conv.id)}`);
+  }
+
   const [{ data: messages }, modelResponsesRes, { data: projects }] =
     await Promise.all([
       sc
@@ -149,11 +153,9 @@ export default async function ChatViewerPage({
 
   const ModeIcon = conv.mode === "compare" ? GitCompare : MessageSquare;
 
-  // For compare mode, show only the first user message + side-by-side responses.
-  // For chat mode, show the full thread.
+  // Chat conversations redirect to the interactive /chat workspace above.
   const userPrompt = allMessages.find((m) => m.role === "user");
-  const chatMessages =
-    conv.mode === "chat" ? allMessages : userPrompt ? [userPrompt] : [];
+  const chatMessages = userPrompt ? [userPrompt] : [];
 
   return (
     <div className="space-y-6 max-w-4xl">

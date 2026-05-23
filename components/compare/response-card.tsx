@@ -316,6 +316,10 @@ export function ResponseCard({
               <span className="inline-block w-1.5 h-4 ml-0.5 bg-muted-foreground/60 animate-pulse align-middle" />
             )}
           </p>
+        ) : status === "done" ? (
+          <p className="text-sm text-muted-foreground italic">
+            No text returned by this model.
+          </p>
         ) : (
           <p className="text-sm text-muted-foreground italic">
             {status === "pending" ? "Waiting…" : "Connecting…"}

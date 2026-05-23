@@ -50,6 +50,7 @@ export function isMemoryFieldKey(value: string): value is MemoryFieldKey {
 export type MemoryRow = {
   project_id: string;
   user_id: string;
+  content: string | null;
   project_goal: string | null;
   important_decisions: string | null;
   user_preferences: string | null;

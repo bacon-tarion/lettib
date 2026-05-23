@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Trash2 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   MEMORY_FIELDS,
   type MemoryFieldKey,
@@ -69,6 +70,8 @@ export function MemoryForm({
   );
   const [enabled, setEnabled] = useState(initialEnabled);
   const [enabledBusy, setEnabledBusy] = useState(false);
+  const [content, setContent] = useState(initialMemory?.content ?? "");
+  const [contentSaving, setContentSaving] = useState(false);
   const [loading, setLoading] = useState(autoLoad);
   const [globalError, setGlobalError] = useState<string | null>(null);
 
@@ -94,6 +97,7 @@ export function MemoryForm({
         initialValuesRef.current = { ...newValues };
         setUpdatedAt(memory?.updated_at ?? null);
         setEnabled(Boolean(data.project?.memory_enabled));
+        setContent((memory?.content as string | null) ?? "");
       })
       .catch((err) => {
         if (!cancelled) {
@@ -158,6 +162,33 @@ export function MemoryForm({
     }
   }
 
+  async function saveContent(value: string) {
+    setContentSaving(true);
+    try {
+      const res = await fetch(`/api/memory/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Save failed");
+      setUpdatedAt(data.memory?.updated_at ?? new Date().toISOString());
+    } catch (err) {
+      setGlobalError(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setContentSaving(false);
+    }
+  }
+
+  async function clearMemory() {
+    if (!confirm("Clear all project memory? This cannot be undone.")) return;
+    setContent("");
+    await saveContent("");
+  }
+
+  const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
+  const charCount = content.length;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
@@ -185,8 +216,55 @@ export function MemoryForm({
 
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>Last updated: {formatRelative(updatedAt)}</span>
-        <span>Auto-saves on blur</span>
+        <span>
+          {charCount.toLocaleString()} chars · {wordCount.toLocaleString()} words
+        </span>
       </div>
+
+      {!enabled && (
+        <p className="text-sm text-muted-foreground rounded-lg border border-dashed p-4">
+          Memory is off for this project. Turn it on to accumulate context from
+          chats and compares.
+        </p>
+      )}
+
+      {enabled && !content.trim() && !loading && (
+        <p className="text-sm text-muted-foreground rounded-lg border border-dashed p-4">
+          No memories yet. Start a conversation in this project to build memory.
+        </p>
+      )}
+
+      {enabled && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label className="text-sm font-medium">Memory content</Label>
+            <div className="flex items-center gap-2">
+              {contentSaving && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs gap-1"
+                onClick={() => void clearMemory()}
+              >
+                <Trash2 className="h-3 w-3" />
+                Clear memory
+              </Button>
+            </div>
+          </div>
+          <Textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            onBlur={(e) => void saveContent(e.target.value)}
+            placeholder="Project memory accumulates automatically from conversations and syntheses…"
+            rows={12}
+            className="resize-y text-sm font-mono"
+          />
+          <p className="text-[11px] text-muted-foreground">Auto-saves on blur</p>
+        </div>
+      )}
 
       {globalError && (
         <p className="text-sm text-destructive">{globalError}</p>
