@@ -8,8 +8,8 @@ export default function MarketingLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100">
-      <header className="sticky top-0 z-40 w-full border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
+    <div className="min-h-screen flex flex-col bg-background text-foreground">
+      <header className="sticky top-0 z-40 w-full border-b border-border bg-background/80 backdrop-blur">
         <div className="mx-auto max-w-6xl flex h-14 items-center justify-between px-4">
           <Link href="/" className="flex items-center gap-2 font-semibold">
             <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
@@ -44,7 +44,7 @@ export default function MarketingLayout({
 
       <main className="flex-1">{children}</main>
 
-      <footer className="border-t border-zinc-800">
+      <footer className="border-t border-border">
         <div className="mx-auto max-w-6xl px-4 py-10 grid gap-8 sm:grid-cols-4 text-sm">
           <div className="space-y-3">
             <div className="flex items-center gap-2 font-semibold">
@@ -53,7 +53,7 @@ export default function MarketingLayout({
               </span>
               LettiB
             </div>
-            <p className="text-zinc-500 text-xs leading-relaxed">
+            <p className="text-muted-foreground text-xs leading-relaxed">
               Built for AI power users.
             </p>
           </div>

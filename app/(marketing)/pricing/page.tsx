@@ -27,13 +27,13 @@ export default async function PricingPage() {
   }
 
   return (
-    <div className="bg-zinc-950 text-zinc-100 min-h-screen">
-      <section className="border-b border-zinc-800">
+    <div className="bg-background text-foreground min-h-screen">
+      <section className="border-b border-border">
         <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-4xl sm:text-5xl font-bold tracking-tight mb-4">
             Simple, BYOK pricing.
           </h1>
-          <p className="text-lg text-zinc-400">
+          <p className="text-lg text-muted-foreground">
             You bring your provider keys. We bring the workspace. Choose a
             monthly plan or lifetime access — zero markup on your AI usage.
           </p>
@@ -42,8 +42,8 @@ export default async function PricingPage() {
 
       <section>
         <div className="mx-auto max-w-6xl px-4 py-16">
-          <PricingGrid dark currentTier={currentTier} />
-          <p className="mt-8 text-center text-xs text-zinc-500">
+          <PricingGrid currentTier={currentTier} />
+          <p className="mt-8 text-center text-xs text-muted-foreground">
             All plans require your own provider API keys (OpenAI, Anthropic,
             Google, xAI (Grok)). You&apos;re billed by the providers for their
             usage.
@@ -51,12 +51,12 @@ export default async function PricingPage() {
         </div>
       </section>
 
-      <section className="border-t border-zinc-800 bg-zinc-900/30">
+      <section className="border-t border-border bg-muted/30">
         <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h2 className="text-2xl font-bold tracking-tight mb-3">
             Not sure yet?
           </h2>
-          <p className="text-zinc-400 mb-6">
+          <p className="text-muted-foreground mb-6">
             The Free plan never expires. Try every model side by side, generate
             syntheses, and upgrade only when you outgrow it.
           </p>

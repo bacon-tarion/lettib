@@ -99,9 +99,9 @@ const FAQ = [
 
 export default function LandingPage() {
   return (
-    <div className="bg-zinc-950 text-zinc-100">
+    <div className="bg-background text-foreground">
       {/* Hero */}
-      <section className="relative overflow-hidden border-b border-zinc-800">
+      <section className="relative overflow-hidden border-b border-border">
         <div
           className="absolute inset-0 opacity-30"
           style={{
@@ -110,16 +110,16 @@ export default function LandingPage() {
             backgroundSize: "48px 48px",
           }}
         />
-        <div className="absolute inset-0 bg-gradient-to-b from-violet-950/40 via-zinc-950 to-zinc-950" />
+        <div className="absolute inset-0 bg-gradient-to-b from-indigo-950/40 via-background to-background" />
         <div className="relative mx-auto max-w-6xl px-4 py-24 md:py-32 text-center space-y-8">
-          <p className="text-xs uppercase tracking-[0.2em] text-violet-400 font-medium">
+          <p className="text-xs uppercase tracking-[0.2em] text-primary font-medium">
             Built for AI power users
           </p>
           <h1 className="text-4xl md:text-6xl font-bold tracking-tight max-w-4xl mx-auto leading-[1.1]">
             One workspace. Every AI.{" "}
-            <span className="text-violet-400">Your data stays yours.</span>
+            <span className="text-primary">Your data stays yours.</span>
           </h1>
-          <p className="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto leading-relaxed">
+          <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
             Compare ChatGPT, Claude, Gemini, and Grok side by side. Synthesize
             the best answer. Own everything.
           </p>
@@ -130,7 +130,7 @@ export default function LandingPage() {
                 <ArrowRight className="h-4 w-4" />
               </Link>
             </Button>
-            <Button asChild size="lg" variant="outline" className="border-zinc-700 bg-transparent">
+            <Button asChild size="lg" variant="outline" className="border-border bg-card/50">
               <Link href="#how-it-works">See how it works</Link>
             </Button>
           </div>
@@ -138,31 +138,31 @@ export default function LandingPage() {
       </section>
 
       {/* Problem bar */}
-      <section className="border-b border-zinc-800 py-16">
+      <section className="border-b border-border py-16">
         <div className="mx-auto max-w-6xl px-4 grid md:grid-cols-3 gap-8">
           {PROBLEMS.map((p) => (
             <div key={p.title} className="space-y-2 text-center md:text-left">
-              <h3 className="font-semibold text-zinc-100">{p.title}</h3>
-              <p className="text-sm text-zinc-400 leading-relaxed">{p.desc}</p>
+              <h3 className="font-semibold text-foreground">{p.title}</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">{p.desc}</p>
             </div>
           ))}
         </div>
       </section>
 
       {/* How it works */}
-      <section id="how-it-works" className="py-20 border-b border-zinc-800">
+      <section id="how-it-works" className="py-20 border-b border-border">
         <div className="mx-auto max-w-6xl px-4 space-y-12">
           <div className="text-center space-y-3">
             <h2 className="text-3xl font-bold">How LettiB works</h2>
-            <p className="text-zinc-400">Three steps to a smarter AI workflow.</p>
+            <p className="text-muted-foreground">Three steps to a smarter AI workflow.</p>
           </div>
           <div className="grid md:grid-cols-3 gap-6">
             {STEPS.map((s) => (
-              <Card key={s.n} className="bg-zinc-900/50 border-zinc-800">
+              <Card key={s.n} className="bg-card border-border">
                 <CardContent className="pt-6 space-y-3">
-                  <span className="text-3xl font-bold text-violet-500">{s.n}</span>
+                  <span className="text-3xl font-bold text-primary">{s.n}</span>
                   <h3 className="font-semibold">{s.title}</h3>
-                  <p className="text-sm text-zinc-400 leading-relaxed">{s.desc}</p>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{s.desc}</p>
                 </CardContent>
               </Card>
             ))}
@@ -171,7 +171,7 @@ export default function LandingPage() {
       </section>
 
       {/* Features */}
-      <section id="features" className="py-20 border-b border-zinc-800">
+      <section id="features" className="py-20 border-b border-border">
         <div className="mx-auto max-w-6xl px-4 space-y-16">
           {FEATURES.map((f, i) => {
             const Icon = f.icon;
@@ -184,19 +184,19 @@ export default function LandingPage() {
                 }`}
               >
                 <div className={`space-y-4 ${reversed ? "md:[direction:ltr]" : ""}`}>
-                  <div className="flex items-center gap-2 text-violet-400">
+                  <div className="flex items-center gap-2 text-primary">
                     <Icon className="h-5 w-5" />
                     <span className="text-sm font-medium">{f.title}</span>
                   </div>
                   <h3 className="text-2xl font-bold">{f.headline}</h3>
-                  <p className="text-zinc-400 leading-relaxed">{f.desc}</p>
+                  <p className="text-muted-foreground leading-relaxed">{f.desc}</p>
                 </div>
                 <div
-                  className={`rounded-xl border border-zinc-800 bg-zinc-900/60 aspect-video flex items-center justify-center ${
+                  className={`rounded-xl border border-border bg-elevated aspect-video flex items-center justify-center ${
                     reversed ? "md:[direction:ltr]" : ""
                   }`}
                 >
-                  <Icon className="h-16 w-16 text-zinc-700" />
+                  <Icon className="h-16 w-16 text-muted-foreground/40" />
                 </div>
               </div>
             );
@@ -205,15 +205,15 @@ export default function LandingPage() {
       </section>
 
       {/* Privacy */}
-      <section className="py-20 border-b border-zinc-800 bg-zinc-900/30">
+      <section className="py-20 border-b border-border bg-muted/30">
         <div className="mx-auto max-w-6xl px-4 grid md:grid-cols-2 gap-12 items-center">
           <div className="space-y-4">
-            <div className="flex items-center gap-2 text-emerald-400">
+            <div className="flex items-center gap-2 text-success">
               <Shield className="h-5 w-5" />
               <span className="text-sm font-medium">Privacy first</span>
             </div>
             <h2 className="text-3xl font-bold">Your keys. Your data. Your rules.</h2>
-            <p className="text-zinc-400 leading-relaxed">
+            <p className="text-muted-foreground leading-relaxed">
               LettiB never trains on your conversations. Your API keys are
               encrypted and never shared. You own everything you create — export,
               delete, or leave anytime.
@@ -226,10 +226,10 @@ export default function LandingPage() {
               { icon: Shield, label: "You own your outputs" },
               { icon: Sparkles, label: "BYOK — zero markup" },
             ].map((item) => (
-              <Card key={item.label} className="bg-zinc-900/50 border-zinc-800">
+              <Card key={item.label} className="bg-card border-border">
                 <CardContent className="pt-5 pb-5 flex flex-col items-center gap-2 text-center">
-                  <item.icon className="h-6 w-6 text-violet-400" />
-                  <span className="text-xs text-zinc-300">{item.label}</span>
+                  <item.icon className="h-6 w-6 text-primary" />
+                  <span className="text-xs text-foreground/80">{item.label}</span>
                 </CardContent>
               </Card>
             ))}
@@ -238,16 +238,16 @@ export default function LandingPage() {
       </section>
 
       {/* Pricing */}
-      <section id="pricing" className="py-20 border-b border-zinc-800">
+      <section id="pricing" className="py-20 border-b border-border">
         <div className="mx-auto max-w-6xl px-4 space-y-10">
           <div className="text-center space-y-3">
             <h2 className="text-3xl font-bold">Simple, transparent pricing</h2>
-            <p className="text-zinc-400">
+            <p className="text-muted-foreground">
               Free forever with BYOK. Upgrade when you need more models and projects.
             </p>
           </div>
-          <PricingGrid dark />
-          <p className="text-center text-xs text-zinc-500">
+          <PricingGrid />
+          <p className="text-center text-xs text-muted-foreground">
             All paid plans are BYOK — you pay AI providers directly. LettiB charges
             only for the workspace (${PRICING_USD.proMonthly}/mo Pro, $
             {PRICING_USD.powerMonthly}/mo Power, ${PRICING_USD.lifetimeByok}{" "}
@@ -257,22 +257,22 @@ export default function LandingPage() {
       </section>
 
       {/* FAQ */}
-      <section id="faq" className="py-20 border-b border-zinc-800">
+      <section id="faq" className="py-20 border-b border-border">
         <div className="mx-auto max-w-3xl px-4 space-y-8">
           <h2 className="text-3xl font-bold text-center">FAQ</h2>
           <div className="space-y-4">
             {FAQ.map((item) => (
               <details
                 key={item.q}
-                className="group rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-3"
+                className="group rounded-lg border border-border bg-card px-4 py-3"
               >
                 <summary className="cursor-pointer font-medium list-none flex justify-between items-center">
                   {item.q}
-                  <span className="text-zinc-500 group-open:rotate-45 transition-transform">
+                  <span className="text-muted-foreground group-open:rotate-45 transition-transform">
                     +
                   </span>
                 </summary>
-                <p className="text-sm text-zinc-400 mt-3 leading-relaxed">{item.a}</p>
+                <p className="text-sm text-muted-foreground mt-3 leading-relaxed">{item.a}</p>
               </details>
             ))}
           </div>
@@ -283,7 +283,7 @@ export default function LandingPage() {
       <section className="py-20">
         <div className="mx-auto max-w-3xl px-4 text-center space-y-6">
           <h2 className="text-3xl font-bold">Ready to own your AI workflow?</h2>
-          <p className="text-zinc-400">
+          <p className="text-muted-foreground">
             Join AI power users who left the tab chaos behind.
           </p>
           <Button asChild size="lg" className="gap-2">

@@ -39,7 +39,6 @@ async function startCheckout(plan: PaidCheckoutPlan) {
 }
 
 export function PricingGrid({
-  dark = false,
   currentTier,
 }: {
   dark?: boolean;
@@ -47,14 +46,6 @@ export function PricingGrid({
 }) {
   const [loadingPlan, setLoadingPlan] = useState<PaidCheckoutPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const cardText = dark ? "text-zinc-100" : "";
-  const titleText = dark ? "text-zinc-100" : "";
-  const priceText = dark ? "text-zinc-100" : "";
-  const featureText = dark ? "text-zinc-300" : "";
-  const mutedText = dark ? "text-zinc-400" : "text-muted-foreground";
-  const darkCard =
-    "border-zinc-800 bg-zinc-900/40 text-zinc-100";
 
   return (
     <div className="space-y-4">
@@ -68,6 +59,7 @@ export function PricingGrid({
           <Card
             key={p.name}
             className={cn(
+              "border-border bg-card text-card-foreground transition-colors hover:border-primary/40 hover:bg-elevated",
               currentTier &&
                 ((p.paidCheckoutPlan === "pro" && currentTier === "pro") ||
                   (p.paidCheckoutPlan === "power" && currentTier === "power") ||
@@ -76,29 +68,28 @@ export function PricingGrid({
                 ? "border-primary shadow-md relative ring-2 ring-primary"
                 : p.highlight
                   ? "border-primary shadow-md relative"
-                  : dark
-                    ? darkCard
-                    : "border-border/60",
-              dark && "text-zinc-100"
+                  : undefined
             )}
           >
             {p.highlight && (
               <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                <Badge className="rounded-full">Most popular</Badge>
+                <Badge variant="secondary" className="rounded-full">
+                  Most popular
+                </Badge>
               </div>
             )}
-            <CardContent className={cn("pt-6 pb-6 space-y-5", cardText)}>
+            <CardContent className="pt-6 pb-6 space-y-5">
               <div className="space-y-1">
-                <h3 className={cn("text-lg font-semibold", titleText)}>{p.name}</h3>
+                <h3 className="text-lg font-semibold text-foreground">{p.name}</h3>
                 <div className="flex items-baseline gap-1">
-                  <span className={cn("text-4xl font-bold tracking-tight", priceText)}>
+                  <span className="text-4xl font-bold tracking-tight text-foreground">
                     {p.price}
                   </span>
-                  <span className={cn("text-sm whitespace-nowrap", mutedText)}>
+                  <span className="text-sm whitespace-nowrap text-muted-foreground">
                     {p.cadence}
                   </span>
                 </div>
-                <p className={cn("text-sm", mutedText)}>{p.blurb}</p>
+                <p className="text-sm text-muted-foreground">{p.blurb}</p>
               </div>
               {p.paidCheckoutPlan ? (
                 <Button
@@ -140,7 +131,7 @@ export function PricingGrid({
               )}
               <ul className="space-y-2 pt-2">
                 {p.features.map((f) => (
-                  <li key={f} className={cn("flex items-start gap-2 text-sm", featureText)}>
+                  <li key={f} className="flex items-start gap-2 text-sm text-foreground/90">
                     <Check className="h-4 w-4 mt-0.5 text-primary shrink-0" />
                     <span>{f}</span>
                   </li>

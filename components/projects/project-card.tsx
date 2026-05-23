@@ -59,7 +59,7 @@ export function ProjectCard({
 
   return (
     <Link href={`/projects/${id}`} className="block h-full group">
-      <Card className="h-full hover:shadow-md transition-shadow cursor-pointer relative">
+      <Card className="h-full hover:shadow-md hover:bg-elevated transition-colors cursor-pointer relative">
         <Button
           type="button"
           variant="ghost"

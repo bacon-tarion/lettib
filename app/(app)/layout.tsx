@@ -26,7 +26,7 @@ export default async function AppLayout({
   }
 
   return (
-    <div className="relative min-h-screen">
+    <div className="relative min-h-screen bg-background">
       <Sidebar userEmail={userEmail} />
       <div className="md:ml-60 flex flex-col min-h-screen">
         <Header />
