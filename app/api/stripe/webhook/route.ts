@@ -38,7 +38,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   const { error } = await sb
     .from("profiles")
     .update({
-      subscription_tier: tier,
+      tier: tier,
       stripe_customer_id: customerId,
       stripe_subscription_id: subscriptionId,
       subscription_status: tier === "lifetime_byok" ? "active" : "active",
@@ -63,7 +63,7 @@ async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
   const sb = createServiceClient();
   const { data: profile } = await sb
     .from("profiles")
-    .select("id, subscription_tier")
+    .select("id, tier")
     .eq("stripe_customer_id", customerId)
     .maybeSingle();
 
@@ -81,7 +81,7 @@ async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
       ).toISOString()
     : null;
 
-  let tier = (profile as { subscription_tier: string }).subscription_tier;
+  let tier = (profile as { tier: string }).tier;
   if (status === "active" || status === "trialing") {
     const item = sub.items.data[0];
     const lookup = item?.price?.lookup_key;
@@ -94,7 +94,7 @@ async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
   const { error } = await sb
     .from("profiles")
     .update({
-      subscription_tier: tier,
+      tier: tier,
       stripe_subscription_id: sub.id,
       subscription_status: status,
       current_period_end: periodEnd,
@@ -116,13 +116,13 @@ async function handleSubscriptionDeleted(sub: Stripe.Subscription) {
   const { error } = await sb
     .from("profiles")
     .update({
-      subscription_tier: "free",
+      tier: "free",
       subscription_status: "canceled",
       stripe_subscription_id: null,
       current_period_end: null,
     })
     .eq("stripe_customer_id", customerId)
-    .neq("subscription_tier", "lifetime_byok");
+    .neq("tier", "lifetime_byok");
 
   if (error) {
     console.error("[stripe webhook] subscription deleted failed", error);

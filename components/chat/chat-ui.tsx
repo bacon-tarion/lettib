@@ -7,6 +7,7 @@ import type { Message } from "ai";
 import { Send, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ClearableTextarea } from "@/components/ui/clearable-textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -261,7 +262,7 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
     selectedProjectId === STANDALONE_PROJECT_VALUE ||
     !selectedProjectId;
 
-  const { messages, input, handleInputChange, handleSubmit, isLoading, setMessages } =
+  const { messages, input, handleInputChange, handleSubmit, isLoading, setMessages, setInput } =
     useChat({
       api: "/api/chat",
       onFinish: useCallback(
@@ -774,13 +775,15 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
             showChips={false}
             className="absolute left-1 bottom-1 z-10"
           />
-          <Textarea
+          <ClearableTextarea
             placeholder="Ask anything… (⌘Enter to send)"
             className="resize-none pr-12 pl-10 min-h-[80px]"
             value={input}
             onChange={handleInputChange}
+            onClear={() => setInput("")}
             onKeyDown={handleKeyDown}
             disabled={isLoading}
+            clearClassName="top-auto bottom-2 right-10"
           />
           <Button
             type="submit"

@@ -253,10 +253,34 @@ export async function listTeams(): Promise<Team[]> {
       .in("ai_team_id", teamIds)
       .order("position", { ascending: true });
 
-    return (teams as { id: string; name: string; default_tone: string; primary_provider: string; primary_model: string; created_at: string }[]).map((team) => ({
+    const withMembers = (teams as {
+      id: string;
+      name: string;
+      default_tone: string;
+      primary_provider: string;
+      primary_model: string;
+      created_at: string;
+    }[]).map((team) => ({
       ...team,
-      members: ((members ?? []) as TeamMember[]).filter((m) => m.ai_team_id === team.id),
+      members: ((members ?? []) as TeamMember[]).filter(
+        (m) => m.ai_team_id === team.id
+      ),
     }));
+
+    // Deduplicate by id, then by normalized name (keeps earliest created).
+    const byId = new Map<string, Team>();
+    for (const team of withMembers) {
+      if (!byId.has(team.id)) byId.set(team.id, team);
+    }
+    const byName = new Map<string, Team>();
+    for (const team of Array.from(byId.values()).sort(
+      (a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    )) {
+      const key = team.name.trim().toLowerCase();
+      if (!byName.has(key)) byName.set(key, team);
+    }
+    return Array.from(byName.values());
   } catch {
     return [];
   }

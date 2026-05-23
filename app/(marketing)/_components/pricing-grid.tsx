@@ -10,6 +10,7 @@ import {
   PRICING_PLANS,
   type PaidCheckoutPlan,
 } from "@/lib/pricing";
+import { cn } from "@/lib/utils";
 
 async function startCheckout(plan: PaidCheckoutPlan) {
   const res = await fetch("/api/stripe/create-checkout-session", {
@@ -47,6 +48,14 @@ export function PricingGrid({
   const [loadingPlan, setLoadingPlan] = useState<PaidCheckoutPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const cardText = dark ? "text-zinc-100" : "";
+  const titleText = dark ? "text-zinc-100" : "";
+  const priceText = dark ? "text-zinc-100" : "";
+  const featureText = dark ? "text-zinc-300" : "";
+  const mutedText = dark ? "text-zinc-400" : "text-muted-foreground";
+  const darkCard =
+    "border-zinc-800 bg-zinc-900/40 text-zinc-100";
+
   return (
     <div className="space-y-4">
       {error && (
@@ -58,37 +67,38 @@ export function PricingGrid({
         {PRICING_PLANS.map((p) => (
           <Card
             key={p.name}
-            className={
+            className={cn(
               currentTier &&
-              ((p.paidCheckoutPlan === "pro" && currentTier === "pro") ||
-                (p.paidCheckoutPlan === "power" && currentTier === "power") ||
-                (p.paidCheckoutPlan === "lifetime_byok" &&
-                  currentTier === "lifetime_byok"))
+                ((p.paidCheckoutPlan === "pro" && currentTier === "pro") ||
+                  (p.paidCheckoutPlan === "power" && currentTier === "power") ||
+                  (p.paidCheckoutPlan === "lifetime_byok" &&
+                    currentTier === "lifetime_byok"))
                 ? "border-primary shadow-md relative ring-2 ring-primary"
                 : p.highlight
-                ? "border-primary shadow-md relative"
-                : dark
-                  ? "border-zinc-800 bg-zinc-900/40"
-                  : "border-border/60"
-            }
+                  ? "border-primary shadow-md relative"
+                  : dark
+                    ? darkCard
+                    : "border-border/60",
+              dark && "text-zinc-100"
+            )}
           >
             {p.highlight && (
               <div className="absolute -top-3 left-1/2 -translate-x-1/2">
                 <Badge className="rounded-full">Most popular</Badge>
               </div>
             )}
-            <CardContent className="pt-6 pb-6 space-y-5">
+            <CardContent className={cn("pt-6 pb-6 space-y-5", cardText)}>
               <div className="space-y-1">
-                <h3 className="text-lg font-semibold">{p.name}</h3>
+                <h3 className={cn("text-lg font-semibold", titleText)}>{p.name}</h3>
                 <div className="flex items-baseline gap-1">
-                  <span className="text-4xl font-bold tracking-tight">
+                  <span className={cn("text-4xl font-bold tracking-tight", priceText)}>
                     {p.price}
                   </span>
-                  <span className="text-sm text-muted-foreground whitespace-nowrap">
+                  <span className={cn("text-sm whitespace-nowrap", mutedText)}>
                     {p.cadence}
                   </span>
                 </div>
-                <p className="text-sm text-muted-foreground">{p.blurb}</p>
+                <p className={cn("text-sm", mutedText)}>{p.blurb}</p>
               </div>
               {p.paidCheckoutPlan ? (
                 <Button
@@ -130,7 +140,7 @@ export function PricingGrid({
               )}
               <ul className="space-y-2 pt-2">
                 {p.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2 text-sm">
+                  <li key={f} className={cn("flex items-start gap-2 text-sm", featureText)}>
                     <Check className="h-4 w-4 mt-0.5 text-primary shrink-0" />
                     <span>{f}</span>
                   </li>

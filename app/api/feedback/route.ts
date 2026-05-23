@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { sendFeedbackNotification } from "@/lib/email/feedback-notify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,5 +52,15 @@ export async function POST(req: NextRequest) {
     console.error("[feedback] insert failed:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  const timestamp = new Date().toISOString();
+  void sendFeedbackNotification({
+    userEmail: user.email ?? "(unknown)",
+    category,
+    message,
+    page,
+    timestamp,
+  });
+
   return NextResponse.json({ ok: true });
 }

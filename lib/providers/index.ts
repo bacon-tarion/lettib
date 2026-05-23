@@ -4,6 +4,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createXai } from "@ai-sdk/xai";
 import { createGroq } from "@ai-sdk/groq";
+import { getServerGroqApiKey } from "./groq-server";
 
 export {
   MODELS_CATALOG,
@@ -16,6 +17,7 @@ export {
   FREE_PROVIDERS,
 } from "./models";
 export type { Provider, ModelEntry } from "./models";
+export { getServerGroqApiKey } from "./groq-server";
 
 export type ProviderName =
   | "openai"
@@ -40,10 +42,12 @@ export type StreamChatInput = {
  * Returns null if the provider is not free or no env key is set.
  *
  * Used as a fallback when the user has not connected their own key for
- * `google`. All other providers always require a user key.
+ * `google` or `groq`. Manual Compare synthesis always uses the server
+ * Groq key via `createServerGroqModel`; Compare lanes fall back here.
  */
 export function getServerApiKey(provider: string): string | null {
   if (provider === "google") return process.env.GOOGLE_API_KEY ?? null;
+  if (provider === "groq") return getServerGroqApiKey();
   return null;
 }
 

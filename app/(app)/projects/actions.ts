@@ -45,9 +45,14 @@ export async function createProject(
 ): Promise<{ error?: string; id?: string }> {
   const name = (formData.get("name") as string).trim();
   const description = (formData.get("description") as string)?.trim() || null;
-  const defaultTeamRaw = (formData.get("default_team_id") as string)?.trim() ?? "";
+  const hasTeamField = formData.has("default_team_id");
+  const defaultTeamRaw = hasTeamField
+    ? ((formData.get("default_team_id") as string | null)?.trim() ?? "")
+    : "";
   const default_team_id =
-    defaultTeamRaw === "" || defaultTeamRaw === "none" ? null : defaultTeamRaw;
+    !defaultTeamRaw || defaultTeamRaw === "none" || defaultTeamRaw === "__none__"
+      ? null
+      : defaultTeamRaw;
   const chatProv = (formData.get("default_chat_provider") as string)?.trim() || "";
   const chatModel = (formData.get("default_chat_model") as string)?.trim() || "";
 
@@ -55,7 +60,7 @@ export async function createProject(
 
   const { supabase, user } = await requireUser();
 
-  if (default_team_id) {
+  if (default_team_id && hasTeamField) {
     const { data: teamRow } = await supabase
       .from("ai_teams")
       .select("id")

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Loader2, Scale, Sparkles, Zap, Settings, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ClearableTextarea } from "@/components/ui/clearable-textarea";
 import {
   Select,
   SelectContent,
@@ -1868,11 +1869,12 @@ export function CompareUI({
           showChips={false}
           className="absolute left-1 bottom-1 z-10"
         />
-        <Textarea
+        <ClearableTextarea
           placeholder="Enter your prompt — it will run on every selected model in parallel…"
           className="resize-none min-h-[100px] pl-10"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
+          onClear={() => setPrompt("")}
           disabled={phase === "streaming" || phase === "saving"}
         />
       </div>
@@ -2138,11 +2140,12 @@ export function CompareUI({
                 Send follow-up to {continueCount} active model
                 {continueCount === 1 ? "" : "s"}
               </p>
-              <Textarea
+              <ClearableTextarea
                 placeholder="Continue the thread — only models with 'Continue in next round' on will reply…"
                 className="resize-none min-h-[80px]"
                 value={followUpPrompt}
                 onChange={(e) => setFollowUpPrompt(e.target.value)}
+                onClear={() => setFollowUpPrompt("")}
               />
               <Button
                 type="button"

@@ -58,11 +58,29 @@ interface NewProjectDialogProps {
 
 export function NewProjectDialog({ teams, connections, trigger }: NewProjectDialogProps) {
   const [open, setOpen] = useState(false);
+  const [formKey, setFormKey] = useState(0);
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction] = useFormState(createProject, initialState);
   const [defaultTeamId, setDefaultTeamId] = useState<string>("none");
   const [defaultChatModelValue, setDefaultChatModelValue] = useState<string>("");
+
+  const uniqueTeams = useMemo(() => {
+    const byId = new Map<string, Team>();
+    for (const t of teams) {
+      if (!byId.has(t.id)) byId.set(t.id, t);
+    }
+    const byName = new Map<string, Team>();
+    for (const t of Array.from(byId.values())) {
+      const key = t.name.trim().toLowerCase();
+      if (!byName.has(key)) byName.set(key, t);
+    }
+    return Array.from(byName.values());
+  }, [teams]);
+
+  const selectedTeamIsValid =
+    defaultTeamId === "none" ||
+    uniqueTeams.some((t) => t.id === defaultTeamId);
 
   const chatOptions = useMemo(
     () => buildDefaultChatModelOptions(connections),
@@ -83,6 +101,7 @@ export function NewProjectDialog({ teams, connections, trigger }: NewProjectDial
     if (!open) return;
     setDefaultTeamId("none");
     setDefaultChatModelValue("");
+    setFormKey((k) => k + 1);
   }, [open]);
 
   const chatSplit =
@@ -108,7 +127,7 @@ export function NewProjectDialog({ teams, connections, trigger }: NewProjectDial
             default AI team and a default single-model preset for Chat.
           </DialogDescription>
         </DialogHeader>
-        <form ref={formRef} action={formAction} className="space-y-4">
+        <form ref={formRef} key={formKey} action={formAction} className="space-y-4">
           {state?.error && (
             <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2 text-sm text-destructive">
               {state.error}
@@ -143,23 +162,26 @@ export function NewProjectDialog({ teams, connections, trigger }: NewProjectDial
             <p className="text-xs text-muted-foreground">
               Multi-model team for Compare and team-based workflows.
             </p>
-            <Select value={defaultTeamId} onValueChange={setDefaultTeamId}>
+            <Select
+              value={selectedTeamIsValid ? defaultTeamId : "none"}
+              onValueChange={setDefaultTeamId}
+            >
               <SelectTrigger id="proj-team">
                 <SelectValue placeholder="No team" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">No team (solo)</SelectItem>
-                {teams.map((t) => (
+                {uniqueTeams.map((t) => (
                   <SelectItem key={t.id} value={t.id} className="text-xs">
                     {t.name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {defaultTeamId !== "none" && (
+            {defaultTeamId !== "none" && selectedTeamIsValid && (
               <input type="hidden" name="default_team_id" value={defaultTeamId} />
             )}
-            {teams.length === 0 && (
+            {uniqueTeams.length === 0 && (
               <p className="text-xs text-muted-foreground">
                 Create teams on the{" "}
                 <a href="/teams" className="underline underline-offset-2">

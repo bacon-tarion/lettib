@@ -5,6 +5,9 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
 async function getSiteUrl() {
+  const fromEnv = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
+  if (fromEnv) return fromEnv;
+
   const headersList = await headers();
   const host = headersList.get("host") ?? "localhost:3000";
   const proto = host.includes("localhost") ? "http" : "https";

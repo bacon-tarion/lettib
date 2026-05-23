@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Plus, X, Loader2, Sparkles, ArrowRight, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ClearableTextarea } from "@/components/ui/clearable-textarea";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
@@ -230,10 +231,11 @@ export default function ManualComparePage() {
 
       <div className="space-y-2">
         <Label htmlFor="prompt">What question did you ask?</Label>
-        <Textarea
+        <ClearableTextarea
           id="prompt"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
+          onClear={() => setPrompt("")}
           placeholder="e.g. What's the best way to structure a Series A pitch deck?"
           className="min-h-[80px] resize-none"
         />
