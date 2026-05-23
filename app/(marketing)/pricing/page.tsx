@@ -20,11 +20,10 @@ export default async function PricingPage() {
   if (user) {
     const { data } = await supabase
       .from("profiles")
-      .select("subscription_tier")
+      .select("tier")
       .eq("id", user.id)
       .maybeSingle();
-    currentTier = (data as { subscription_tier: string } | null)
-      ?.subscription_tier;
+    currentTier = (data as { tier: string } | null)?.tier;
   }
 
   return (

@@ -2,24 +2,27 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { maxCompareModelsForSubscriptionTier } from "@/lib/pricing";
 
 export type UserSubscription = {
-  subscription_tier: string;
+  tier: string;
   subscription_status: string;
+  current_period_end: string | null;
 };
 
+/** Read billing tier from `profiles.tier` (updated by Stripe webhook). */
 export async function getUserSubscription(
   userId: string
 ): Promise<UserSubscription> {
   const sc = createServiceClient();
   const { data } = await sc
     .from("profiles")
-    .select("subscription_tier, subscription_status")
+    .select("tier, subscription_status, current_period_end")
     .eq("id", userId)
     .maybeSingle();
 
   const row = data as UserSubscription | null;
   return {
-    subscription_tier: row?.subscription_tier ?? "free",
+    tier: row?.tier ?? "free",
     subscription_status: row?.subscription_status ?? "active",
+    current_period_end: row?.current_period_end ?? null,
   };
 }
 

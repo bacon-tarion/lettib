@@ -17,7 +17,7 @@ export const COMPARE_MODELS_BY_PLAN = {
   power: 6,
 } as const;
 
-/** Max parallel models in Compare for a `profiles.subscription_tier` value. */
+/** Max parallel models in Compare for a `profiles.tier` value. */
 export function maxCompareModelsForSubscriptionTier(
   tier: string | null | undefined
 ): number {

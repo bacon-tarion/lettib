@@ -24,7 +24,7 @@ export async function GET() {
   const sc = createServiceClient();
   const { data: profile } = await sc
     .from("profiles")
-    .select("stripe_customer_id, subscription_tier")
+    .select("stripe_customer_id")
     .eq("id", user.id)
     .maybeSingle();
 

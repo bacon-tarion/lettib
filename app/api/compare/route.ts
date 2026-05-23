@@ -261,12 +261,12 @@ export async function POST(req: NextRequest) {
 
   const serviceClient = createServiceClient();
 
-  const { subscription_tier } = await getUserSubscription(user.id);
-  const tierMax = maxCompareModelsForUser(subscription_tier);
+  const { tier } = await getUserSubscription(user.id);
+  const tierMax = maxCompareModelsForUser(tier);
   if (!isRetry && modelIds.length > tierMax) {
     return new Response(
       JSON.stringify({
-        error: compareModelLimitError(subscription_tier),
+        error: compareModelLimitError(tier),
         max_models: tierMax,
       }),
       { status: 403 }
