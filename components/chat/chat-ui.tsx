@@ -6,7 +6,6 @@ import { useChat } from "ai/react";
 import type { Message } from "ai";
 import { Send, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { ClearableTextarea } from "@/components/ui/clearable-textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";

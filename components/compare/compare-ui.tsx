@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Loader2, Scale, Sparkles, Zap, Settings, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { ClearableTextarea } from "@/components/ui/clearable-textarea";
 import {
   Select,
