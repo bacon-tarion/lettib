@@ -4,9 +4,10 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { logUsageAsync } from "@/lib/usage/log";
 import { calcCompareModelCost } from "@/lib/compare/cost";
 import { loadProjectMemory } from "@/lib/memory/queries";
+import { GROQ_SERVER_MODEL } from "@/lib/providers/groq-server";
 
 const EXTRACTOR_PROVIDER = "groq";
-const EXTRACTOR_MODEL = "llama-3.3-70b-versatile";
+const EXTRACTOR_MODEL = GROQ_SERVER_MODEL;
 
 const EXTRACTION_PROMPT = `Review this conversation and extract only information useful for future work on this project. Include: goals, decisions, preferences, key facts, open questions, next steps. Be concise. Return plain text.
 
