@@ -19,7 +19,7 @@ async function requireOwner(id: string) {
   const { data: conv } = await sc
     .from("conversations")
     .select(
-      "id, user_id, project_id, title, mode, provider, model, created_at, updated_at, deleted_at"
+      "id, user_id, project_id, title, mode, compare_key_mode, provider, model, created_at, updated_at, deleted_at"
     )
     .eq("id", id)
     .maybeSingle();
@@ -38,6 +38,7 @@ type ConversationRow = {
   project_id: string | null;
   title: string;
   mode: "chat" | "compare";
+  compare_key_mode: string | null;
   provider: string | null;
   model: string | null;
   created_at: string;

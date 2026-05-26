@@ -41,7 +41,7 @@ export default async function SynthesisPage({
   const { data: synth } = await serviceClient
     .from("syntheses")
     .select(
-      "id, user_id, conversation_id, project_id, prompt, content, detailed_content, clean_content, clean_cost_usd, provider, model, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, score, user_feedback, conflict_resolutions"
+      "id, user_id, conversation_id, project_id, prompt, content, detailed_content, clean_content, clean_cost_usd, provider, model, mode, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, score, user_feedback, conflict_resolutions"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -61,6 +61,7 @@ export default async function SynthesisPage({
     clean_cost_usd: number | null;
     provider: string | null;
     model: string | null;
+    mode: string;
     tone: string;
     tokens_in: number;
     tokens_out: number;
@@ -120,6 +121,20 @@ export default async function SynthesisPage({
   const cleanBody = synthesis.clean_content;
   const hasClean =
     typeof cleanBody === "string" && cleanBody.trim().length > 0;
+
+  let compareKeyMode: "manual" | "byok" = "byok";
+  if (synthesis.conversation_id) {
+    const { data: conv } = await serviceClient
+      .from("conversations")
+      .select("compare_key_mode")
+      .eq("id", synthesis.conversation_id)
+      .maybeSingle();
+    if ((conv as { compare_key_mode?: string } | null)?.compare_key_mode === "manual") {
+      compareKeyMode = "manual";
+    }
+  } else if (synthesis.mode === "manual") {
+    compareKeyMode = "manual";
+  }
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -218,6 +233,7 @@ export default async function SynthesisPage({
         initialScore={synthesis.score}
         initialFeedback={synthesis.user_feedback}
         conversationId={synthesis.conversation_id}
+        compareKeyMode={compareKeyMode}
         initialTone={synthesis.tone}
         projectId={synthesis.project_id}
       />

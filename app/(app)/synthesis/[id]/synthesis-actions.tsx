@@ -40,6 +40,8 @@ interface SynthesisActionsProps {
   initialFeedback: string | null;
   /** Compare conversation — when set, user can regenerate with a new tone. */
   conversationId: string | null;
+  /** manual = server Groq; byok = user vault. */
+  compareKeyMode?: "manual" | "byok" | null;
   initialTone: string;
   projectId?: string | null;
   shareSlot?: ReactNode;
@@ -58,6 +60,7 @@ export function SynthesisActions({
   initialScore,
   initialFeedback,
   conversationId,
+  compareKeyMode = "byok",
   initialTone,
   projectId,
   shareSlot,
@@ -134,6 +137,7 @@ export function SynthesisActions({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           comparison_id: conversationId,
+          compare_key_mode: compareKeyMode ?? "byok",
           tone: regenTone,
           project_id: projectId ?? null,
         }),

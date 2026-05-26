@@ -1425,6 +1425,7 @@ export function CompareUI({
         body: JSON.stringify({
           comparison_id: conversationId,
           conversation_id: conversationId,
+          compare_key_mode: "byok",
           tone: selectedTone,
           project_id: resolveCompareProjectId(selectedProjectId),
           source_response_ids: sourceIds,

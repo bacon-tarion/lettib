@@ -181,6 +181,7 @@ export async function POST(req: NextRequest) {
       project_id: resolvedProjectId,
       title,
       mode: "compare",
+      compare_key_mode: "byok",
       provider: responses[0]!.provider,
       model: responses[0]!.model,
     })

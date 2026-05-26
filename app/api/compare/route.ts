@@ -554,6 +554,7 @@ export async function POST(req: NextRequest) {
         title,
         mode: "compare",
         type: "compare",
+        compare_key_mode: "byok",
         provider: modelIds[0]!.provider,
         model: modelIds[0]!.model,
       })

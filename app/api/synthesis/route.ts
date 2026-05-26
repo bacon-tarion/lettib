@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
-import { createAnthropic } from "@ai-sdk/anthropic";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers";
+import {
+  DEFAULT_COMPARE_KEY_MODE,
+  parseCompareKeyMode,
+} from "@/lib/compare/key-mode";
+import { resolveSynthesisProvider } from "@/lib/synthesis/resolve-provider";
 import { LETTIB_SYNTHESIS_ATTRIBUTION_PROMPT } from "@/lib/prompts/synthesis-attribution";
 import { LETTIB_SYNTHESIS_CLEAN_PROMPT } from "@/lib/prompts/synthesis-clean";
 import { formatCompareResponsesForAttribution } from "@/lib/synthesis/attribution-tags";
@@ -19,9 +23,6 @@ import { logUsageAsync } from "@/lib/usage/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const SYNTH_PROVIDER = "anthropic";
-const SYNTH_MODEL = "claude-sonnet-4-6";
 
 function calcCost(provider: string, model: string, tin: number, tout: number) {
   const catalog = MODELS_CATALOG as Record<
@@ -61,6 +62,8 @@ export async function POST(req: NextRequest) {
      * Deselected responses must NOT influence the synthesis.
      */
     source_response_ids?: unknown;
+    /** manual = server GROQ_API_KEY; byok = user vault (Anthropic). */
+    compare_key_mode?: unknown;
   };
 
   const requestedSourceIds = Array.isArray(rawSourceIds)
@@ -81,7 +84,7 @@ export async function POST(req: NextRequest) {
 
   const { data: conv } = await serviceClient
     .from("conversations")
-    .select("id, user_id, project_id, title")
+    .select("id, user_id, project_id, title, compare_key_mode")
     .eq("id", comparisonId)
     .single();
 
@@ -92,8 +95,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let projectId: string | null =
-    (conv as { project_id: string | null }).project_id ?? null;
+  const convRow = conv as {
+    user_id: string;
+    project_id: string | null;
+    title: string;
+    compare_key_mode?: string | null;
+  };
+
+  const compareKeyMode =
+    parseCompareKeyMode(body.compare_key_mode) ??
+    parseCompareKeyMode(convRow.compare_key_mode) ??
+    DEFAULT_COMPARE_KEY_MODE;
+
+  let projectId: string | null = convRow.project_id ?? null;
   if (bodyProjectId) {
     const { data: owned } = await serviceClient
       .from("projects")
@@ -118,7 +132,7 @@ export async function POST(req: NextRequest) {
 
   const prompt =
     (userMsg as { content: string } | null)?.content ??
-    (conv as { title: string }).title ??
+    convRow.title ??
     "";
 
   // Pull every response in the conversation (ownership already verified
@@ -175,43 +189,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { data: anthropicConn } = await serviceClient
-    .from("api_connections")
-    .select("vault_secret_id, custom_base_url")
-    .eq("user_id", user.id)
-    .eq("provider", "anthropic")
-    .in("status", ["connected", "untested"])
-    .maybeSingle();
-
-  if (!anthropicConn) {
-    return NextResponse.json(
-      {
-        error:
-          "LettiB Synthesis uses Claude Sonnet on your Anthropic account. Connect Anthropic in Settings.",
-      },
-      { status: 400 }
+  let synthProvider: string;
+  let synthModelId: string;
+  let synthModel: Awaited<ReturnType<typeof resolveSynthesisProvider>>["model"];
+  try {
+    const resolved = await resolveSynthesisProvider(
+      serviceClient,
+      user.id,
+      compareKeyMode
     );
-  }
-
-  const { data: apiKey, error: vaultError } = await serviceClient.rpc(
-    "lettib_read_secret",
-    {
-      p_secret_id: (anthropicConn as { vault_secret_id: string }).vault_secret_id,
-    }
-  );
-  if (vaultError || !apiKey) {
-    return NextResponse.json(
-      { error: "Could not decrypt Anthropic API key for synthesis" },
-      { status: 500 }
-    );
-  }
-  const trimmedKey =
-    typeof apiKey === "string" ? apiKey.trim() : String(apiKey).trim();
-  if (!trimmedKey) {
-    return NextResponse.json(
-      { error: "Anthropic API key is empty after decrypt" },
-      { status: 500 }
-    );
+    synthProvider = resolved.provider;
+    synthModelId = resolved.modelId;
+    synthModel = resolved.model;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Synthesis provider unavailable";
+    const status = message.includes("Connect Anthropic") ? 400 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 
   const modelResponsesBlock = formatCompareResponsesForAttribution(successful);
@@ -223,8 +216,6 @@ export async function POST(req: NextRequest) {
     .replace("{{tone}}", toneUsed)
     .replace("{{model_responses}}", modelResponsesBlock);
 
-  const synthModel = createAnthropic({ apiKey: trimmedKey })(SYNTH_MODEL);
-
   try {
     const startedAt = Date.now();
     const result = await generateText({
@@ -234,7 +225,7 @@ export async function POST(req: NextRequest) {
 
     const tokensIn = result.usage?.promptTokens ?? 0;
     const tokensOut = result.usage?.completionTokens ?? 0;
-    const cost = calcCost(SYNTH_PROVIDER, SYNTH_MODEL, tokensIn, tokensOut);
+    const cost = calcCost(synthProvider, synthModelId, tokensIn, tokensOut);
     const latency = Date.now() - startedAt;
 
     const { conflicts, bodyWithoutBlock } = extractConflictsBlock(result.text);
@@ -267,8 +258,8 @@ export async function POST(req: NextRequest) {
       cleanTokensIn = cleanResult.usage?.promptTokens ?? 0;
       cleanTokensOut = cleanResult.usage?.completionTokens ?? 0;
       cleanCost = calcCost(
-        SYNTH_PROVIDER,
-        SYNTH_MODEL,
+        synthProvider,
+        synthModelId,
         cleanTokensIn,
         cleanTokensOut
       );
@@ -288,14 +279,15 @@ export async function POST(req: NextRequest) {
       detailed_content: bodyWithoutBlock,
       clean_content: cleanContent,
       tone: toneUsed,
-      provider: SYNTH_PROVIDER,
-      model: SYNTH_MODEL,
+      provider: synthProvider,
+      model: synthModelId,
+      compare_key_mode: compareKeyMode,
       tokens_in: tokensIn,
       tokens_out: tokensOut,
       cost_usd: cost,
       latency_ms: latency,
-      clean_provider: cleanContent ? SYNTH_PROVIDER : null,
-      clean_model: cleanContent ? SYNTH_MODEL : null,
+      clean_provider: cleanContent ? synthProvider : null,
+      clean_model: cleanContent ? synthModelId : null,
       clean_tokens_in: cleanTokensIn,
       clean_tokens_out: cleanTokensOut,
       clean_cost_usd: cleanCost,
@@ -329,15 +321,15 @@ export async function POST(req: NextRequest) {
       content: bodyWithoutBlock,
       detailed_content: bodyWithoutBlock,
       clean_content: cleanContent,
-      provider: SYNTH_PROVIDER,
-      model: SYNTH_MODEL,
+      provider: synthProvider,
+      model: synthModelId,
       tone: toneUsed,
       tokens_in: tokensIn,
       tokens_out: tokensOut,
       cost_usd: cost,
       latency_ms: latency,
-      clean_provider: cleanContent ? SYNTH_PROVIDER : null,
-      clean_model: cleanContent ? SYNTH_MODEL : null,
+      clean_provider: cleanContent ? synthProvider : null,
+      clean_model: cleanContent ? synthModelId : null,
       clean_tokens_in: cleanTokensIn,
       clean_tokens_out: cleanTokensOut,
       clean_cost_usd: cleanCost,
@@ -370,8 +362,8 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       conversationId: comparisonId,
       action: "synthesis",
-      provider: SYNTH_PROVIDER,
-      model: SYNTH_MODEL,
+      provider: synthProvider,
+      model: synthModelId,
       tokensIn,
       tokensOut,
       costUsd: cost,
@@ -383,8 +375,8 @@ export async function POST(req: NextRequest) {
         userId: user.id,
         conversationId: comparisonId,
         action: "synthesis_clean",
-        provider: SYNTH_PROVIDER,
-        model: SYNTH_MODEL,
+        provider: synthProvider,
+        model: synthModelId,
         tokensIn: cleanTokensIn,
         tokensOut: cleanTokensOut,
         costUsd: cleanCost,
@@ -475,13 +467,13 @@ export async function POST(req: NextRequest) {
             userId: user.id,
             conversationId: comparisonId,
             action: "memory_extraction",
-            provider: SYNTH_PROVIDER,
-            model: SYNTH_MODEL,
+            provider: synthProvider,
+            model: synthModelId,
             tokensIn: extractTokensIn,
             tokensOut: extractTokensOut,
             costUsd: calcCost(
-              SYNTH_PROVIDER,
-              SYNTH_MODEL,
+              synthProvider,
+              synthModelId,
               extractTokensIn,
               extractTokensOut
             ),

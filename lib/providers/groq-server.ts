@@ -3,8 +3,8 @@ import { createGroq } from "@ai-sdk/groq";
 export const GROQ_SERVER_MODEL = "llama-3.3-70b-versatile";
 
 /**
- * Server-side Groq API key from env — used for Manual Compare synthesis
- * and other built-in features that must not require user API keys.
+ * Server-side Groq API key from env (GROQ_API_KEY) — used for Manual Compare /
+ * manual-key synthesis and built-in Groq compare lanes without user API keys.
  */
 export function getServerGroqApiKey(): string | null {
   const key = process.env.GROQ_API_KEY?.trim();
