@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { listTeams } from "@/app/(app)/teams/actions";
 import { CompareUI } from "@/components/compare/compare-ui";
+import { getUserSubscription, maxCompareModelsForUser } from "@/lib/subscription/tier";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,8 @@ export default async function ComparePage() {
   ]);
 
   const connectionList = (connections ?? []) as CompareConnection[];
+  const { tier } = await getUserSubscription(user.id);
+  const maxCompareModels = maxCompareModelsForUser(tier);
 
   return (
     <Suspense
@@ -55,6 +58,7 @@ export default async function ComparePage() {
         projects={(projects ?? []) as CompareProject[]}
         connections={connectionList}
         teams={teams}
+        maxCompareModels={maxCompareModels}
       />
     </Suspense>
   );

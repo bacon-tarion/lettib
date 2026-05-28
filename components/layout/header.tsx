@@ -16,9 +16,15 @@ const PAGE_TITLES: Record<string, string> = {
   "/settings": "Settings",
   "/admin": "Admin",
   "/search": "Search",
+  "/synthesis": "Synthesis",
 };
 
-export function Header() {
+interface HeaderProps {
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+}
+
+export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
   const pathname = usePathname();
   const router = useRouter();
   const title =
@@ -52,7 +58,13 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4 gap-3">
-      <Button variant="ghost" size="icon" className="md:hidden shrink-0">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="hidden md:inline-flex shrink-0"
+        onClick={onToggleSidebar}
+        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+      >
         <Menu className="h-5 w-5" />
       </Button>
       <span className="text-sm font-semibold flex-1 md:flex-none">{title}</span>

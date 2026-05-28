@@ -1,3 +1,4 @@
+import "@/lib/env/mock-mode-guard";
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 

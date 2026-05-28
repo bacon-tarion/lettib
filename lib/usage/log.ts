@@ -1,5 +1,6 @@
 import { MODELS_CATALOG } from "@/lib/providers/models";
 import { createServiceClient } from "@/lib/supabase/service";
+import { DEBUG_LOGGING } from "@/lib/debug";
 
 type UsageLogClient = {
   from: (table: "usage_logs") => {
@@ -51,7 +52,6 @@ export function logUsageAsync(
   client: UsageLogClient,
   input: UsageLogInput
 ): void {
-  console.log('[USAGE_LOG] Attempting to write:', JSON.stringify(input));
   void client;
   const tokensIn = asNonNegativeInt(input.tokensIn);
   const tokensOut = asNonNegativeInt(input.tokensOut);
@@ -72,23 +72,21 @@ export function logUsageAsync(
     created_at: input.createdAt ?? new Date().toISOString(),
   };
 
-  console.log("[usage_logs] insert attempt:", {
-    action: row.action,
-    provider: row.provider,
-    model: row.model,
-    conversation_id: row.conversation_id,
-    tokens_in: row.tokens_in,
-    tokens_out: row.tokens_out,
-    cost_usd: row.cost_usd,
-  });
+  if (DEBUG_LOGGING) {
+    console.log("[usage_logs] insert", {
+      action: row.action,
+      provider: row.provider,
+      model: row.model,
+    });
+  }
 
   void Promise.resolve(createServiceClient().from("usage_logs").insert(row))
     .then(({ error }) => {
       if (error) {
-        console.error("[usage_logs] insert failed:", error);
+        console.error("[usage_logs] insert failed");
       }
     })
-    .catch((error: unknown) => {
-      console.error('[USAGE_LOG] Insert failed:', error);
+    .catch(() => {
+      console.error("[usage_logs] insert failed");
     });
 }

@@ -1,9 +1,8 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { ArrowLeft } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { createServiceClient } from "@/lib/supabase/service";
 import { SynthesesSearch } from "@/components/syntheses/syntheses-search";
 import {
   SynthesesListGrid,
@@ -12,11 +11,9 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export default async function ProjectSynthesesPage({
-  params,
+export default async function GlobalSynthesesPage({
   searchParams,
 }: {
-  params: { id: string };
   searchParams: { q?: string };
 }) {
   const sb = await createClient();
@@ -25,26 +22,12 @@ export default async function ProjectSynthesesPage({
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
 
-  const service = createServiceClient();
-
-  const { data: project } = await service
-    .from("projects")
-    .select("id, user_id, name")
-    .eq("id", params.id)
-    .maybeSingle();
-
-  if (!project || (project as { user_id: string }).user_id !== user.id) {
-    notFound();
-  }
-  const proj = project as { id: string; name: string };
-
-  const { data } = await service
+  const { data } = await sb
     .from("syntheses")
     .select(
       "id, prompt, content, provider, model, tone, tokens_in, tokens_out, cost_usd, source_response_ids, score, created_at"
     )
     .eq("user_id", user.id)
-    .eq("project_id", params.id)
     .order("created_at", { ascending: false })
     .limit(200);
 
@@ -62,15 +45,15 @@ export default async function ProjectSynthesesPage({
     <div className="space-y-6 max-w-4xl">
       <div className="space-y-2">
         <Link
-          href={`/projects/${params.id}`}
+          href="/compare"
           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-3 w-3" />
-          Back to {proj.name}
+          Back to Compare
         </Link>
-        <h1 className="text-2xl font-bold">Syntheses</h1>
+        <h1 className="text-2xl font-bold">Synthesis history</h1>
         <p className="text-muted-foreground text-sm">
-          {all.length.toLocaleString()} total
+          {all.length.toLocaleString()} total across your workspace
         </p>
       </div>
 

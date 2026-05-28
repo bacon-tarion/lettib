@@ -1,5 +1,9 @@
 import type { LanguageModel } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
+import { createOpenAI } from "@ai-sdk/openai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createXai } from "@ai-sdk/xai";
+import { createGroq } from "@ai-sdk/groq";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CompareKeyMode } from "@/lib/compare/key-mode";
 import {
@@ -7,8 +11,23 @@ import {
   GROQ_SERVER_MODEL,
 } from "@/lib/providers/groq-server";
 
-const BYOK_SYNTH_PROVIDER = "anthropic";
-const BYOK_SYNTH_MODEL = "claude-sonnet-4-6";
+/** Preferred order when multiple BYOK providers are connected. */
+const BYOK_PROVIDER_PRIORITY = [
+  "anthropic",
+  "openai",
+  "google",
+  "xai",
+  "custom",
+  "groq",
+] as const;
+
+const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
+  anthropic: "claude-sonnet-4-6",
+  openai: "gpt-4o-mini",
+  google: "gemini-2.5-flash",
+  xai: "grok-4.20-0309-non-reasoning",
+  groq: "llama-3.3-70b-versatile",
+};
 
 export type SynthesisProviderConfig = {
   model: LanguageModel;
@@ -17,9 +36,48 @@ export type SynthesisProviderConfig = {
   compareKeyMode: CompareKeyMode;
 };
 
+type ConnRow = {
+  provider: string;
+  vault_secret_id: string;
+  custom_base_url: string | null;
+  custom_model_name: string | null;
+};
+
+function buildByokModel(
+  provider: string,
+  apiKey: string,
+  modelId: string,
+  baseUrl: string | null
+): LanguageModel {
+  switch (provider) {
+    case "openai":
+      return createOpenAI({ apiKey })(modelId);
+    case "anthropic":
+      return createAnthropic({ apiKey })(modelId);
+    case "google":
+      return createGoogleGenerativeAI({ apiKey })(modelId);
+    case "xai":
+      return createXai({ apiKey })(modelId);
+    case "groq":
+      return createGroq({ apiKey })(modelId);
+    case "custom":
+      if (!baseUrl) throw new Error("Custom provider is missing base URL.");
+      return createOpenAI({ apiKey, baseURL: baseUrl })(modelId);
+    default:
+      throw new Error(`Unsupported synthesis provider: ${provider}`);
+  }
+}
+
+function modelIdForConnection(conn: ConnRow): string {
+  if (conn.provider === "custom") {
+    return conn.custom_model_name?.trim() || "custom";
+  }
+  return DEFAULT_MODEL_BY_PROVIDER[conn.provider] ?? "gpt-4o-mini";
+}
+
 /**
  * Manual Compare synthesis uses the server GROQ_API_KEY.
- * BYOK Compare synthesis uses the user's Anthropic vault key.
+ * BYOK Compare synthesis uses any connected user provider, else server Groq.
  */
 export async function resolveSynthesisProvider(
   serviceClient: SupabaseClient,
@@ -35,39 +93,54 @@ export async function resolveSynthesisProvider(
     };
   }
 
-  const { data: anthropicConn } = await serviceClient
+  const { data: connections } = await serviceClient
     .from("api_connections")
-    .select("vault_secret_id")
+    .select("provider, vault_secret_id, custom_base_url, custom_model_name")
     .eq("user_id", userId)
-    .eq("provider", "anthropic")
-    .in("status", ["connected", "untested"])
-    .maybeSingle();
+    .in("status", ["connected", "untested"]);
 
-  if (!anthropicConn) {
-    throw new Error(
-      "LettiB Synthesis uses Claude Sonnet on your Anthropic account. Connect Anthropic in Settings."
+  const connByProvider = new Map<string, ConnRow>();
+  for (const c of (connections ?? []) as ConnRow[]) {
+    connByProvider.set(c.provider, c);
+  }
+
+  for (const provider of BYOK_PROVIDER_PRIORITY) {
+    const conn = connByProvider.get(provider);
+    if (!conn) continue;
+
+    const { data: apiKey, error: vaultError } = await serviceClient.rpc(
+      "lettib_read_secret",
+      { p_secret_id: conn.vault_secret_id }
     );
-  }
+    if (vaultError || !apiKey) continue;
 
-  const { data: apiKey, error: vaultError } = await serviceClient.rpc(
-    "lettib_read_secret",
-    {
-      p_secret_id: (anthropicConn as { vault_secret_id: string }).vault_secret_id,
+    const trimmedKey =
+      typeof apiKey === "string" ? apiKey.trim() : String(apiKey).trim();
+    if (!trimmedKey) continue;
+
+    const modelId = modelIdForConnection(conn);
+    try {
+      const model = buildByokModel(
+        provider,
+        trimmedKey,
+        modelId,
+        conn.custom_base_url
+      );
+      return {
+        model,
+        provider,
+        modelId,
+        compareKeyMode: "byok",
+      };
+    } catch {
+      continue;
     }
-  );
-  if (vaultError || !apiKey) {
-    throw new Error("Could not decrypt Anthropic API key for synthesis");
-  }
-  const trimmedKey =
-    typeof apiKey === "string" ? apiKey.trim() : String(apiKey).trim();
-  if (!trimmedKey) {
-    throw new Error("Anthropic API key is empty after decrypt");
   }
 
   return {
-    model: createAnthropic({ apiKey: trimmedKey })(BYOK_SYNTH_MODEL),
-    provider: BYOK_SYNTH_PROVIDER,
-    modelId: BYOK_SYNTH_MODEL,
-    compareKeyMode: "byok",
+    model: createServerGroqModel(GROQ_SERVER_MODEL),
+    provider: "groq",
+    modelId: GROQ_SERVER_MODEL,
+    compareKeyMode: "manual",
   };
 }

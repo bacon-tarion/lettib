@@ -140,6 +140,8 @@ interface CompareUIProps {
   projects: CompareProject[];
   connections: CompareConnection[];
   teams: Team[];
+  /** Max models selectable at once for the user's subscription tier. */
+  maxCompareModels: number;
 }
 
 function snapshotRowToState(
@@ -166,6 +168,7 @@ export function CompareUI({
   projects,
   connections,
   teams,
+  maxCompareModels,
 }: CompareUIProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -202,9 +205,11 @@ export function CompareUI({
   const [sessionTitle, setSessionTitle] = useState<string | null>(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useWebSearchPreference();
+  const modelCap = Math.min(maxCompareModels, MAX_COMPARE_PARALLEL_MODELS);
+
   const [selectedValues, setSelectedValues] = useState<Set<string>>(() => {
     const s = new Set<string>();
-    for (let i = 0; i < Math.min(MAX_COMPARE_PARALLEL_MODELS, modelPicks.length); i++) {
+    for (let i = 0; i < Math.min(modelCap, modelPicks.length); i++) {
       s.add(modelPicks[i]!.value);
     }
     if (s.size === 0 && modelPicks[0]) s.add(modelPicks[0].value);
@@ -528,14 +533,14 @@ export function CompareUI({
         if (modelPicks.some((p) => p.value === v)) next.add(v);
       }
       if (next.size === 0 && modelPicks[0]) {
-        for (let i = 0; i < Math.min(MAX_COMPARE_PARALLEL_MODELS, modelPicks.length); i++) {
+        for (let i = 0; i < Math.min(modelCap, modelPicks.length); i++) {
           next.add(modelPicks[i]!.value);
         }
         if (next.size === 0) next.add(modelPicks[0].value);
       }
       return next;
     });
-  }, [modelPicks]);
+  }, [modelPicks, modelCap]);
 
   useEffect(() => {
     fetch("/api/usage/compare-count")
@@ -585,7 +590,7 @@ export function CompareUI({
       const v = `${m.provider}::${m.model}`;
       if (allowed.has(v)) {
         next.push(v);
-        if (next.length >= MAX_COMPARE_PARALLEL_MODELS) break;
+        if (next.length >= modelCap) break;
       }
     }
     setSelectedValues(new Set(next));
@@ -599,7 +604,7 @@ export function CompareUI({
         next.delete(value);
         return next;
       }
-      if (next.size >= MAX_COMPARE_PARALLEL_MODELS) return prev;
+      if (next.size >= modelCap) return prev;
       next.add(value);
       return next;
     });
@@ -1698,7 +1703,8 @@ export function CompareUI({
               </Link>
             </Button>
           )}
-          {selectedProjectId ? (
+          {selectedProjectId !== STANDALONE_PROJECT_VALUE &&
+          projects.some((p) => p.id === selectedProjectId) ? (
             <Button asChild variant="outline" size="sm" className="gap-1.5">
               <Link
                 href={`/projects/${selectedProjectId}/syntheses`}
@@ -1710,8 +1716,8 @@ export function CompareUI({
             </Button>
           ) : (
             <Button asChild variant="outline" size="sm" className="gap-1.5">
-              <Link href="/projects" className="inline-flex items-center gap-1.5">
-                Projects & synthesis history
+              <Link href="/synthesis" className="inline-flex items-center gap-1.5">
+                Synthesis history
                 <ExternalLink className="h-3 w-3" />
               </Link>
             </Button>
@@ -1803,7 +1809,7 @@ export function CompareUI({
 
       <div className="space-y-2">
         <p className="text-xs font-medium text-muted-foreground">
-          Models (up to {MAX_COMPARE_PARALLEL_MODELS})
+          Models (up to {modelCap})
         </p>
         {teams.length > 0 && (
           <p className="text-[11px] text-muted-foreground">
@@ -1816,7 +1822,7 @@ export function CompareUI({
             const checked = selectedValues.has(p.value);
             const warningNote = getModelWarningNote(p.modelId);
             const atCap =
-              selectedValues.size >= MAX_COMPARE_PARALLEL_MODELS && !checked;
+              selectedValues.size >= modelCap && !checked;
             return (
               <label
                 key={p.value}

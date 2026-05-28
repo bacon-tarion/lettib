@@ -283,15 +283,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── Free-tier compare limit ───────────────────────────────────────────────
-  const { data: paidConns } = await serviceClient
+  // ── Free-tier compare limit (paid tier exempt; Groq-only BYOK not exempt) ─
+  const isPaidTier = tier !== "free";
+  const { data: byokConns } = await serviceClient
     .from("api_connections")
     .select("provider")
     .eq("user_id", user.id)
     .in("status", ["connected", "untested"])
     .neq("provider", "groq");
-  const isFreeTier = !paidConns || paidConns.length === 0;
-  if (isFreeTier && !isRetry) {
+  const hasByokKeys = (byokConns?.length ?? 0) > 0;
+  const subjectToFreeCompareCap = !isPaidTier && !hasByokKeys;
+  if (subjectToFreeCompareCap && !isRetry) {
     const monthStart = new Date();
     monthStart.setUTCDate(1);
     monthStart.setUTCHours(0, 0, 0, 0);
