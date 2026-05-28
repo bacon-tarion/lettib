@@ -46,6 +46,10 @@ import {
   type AttachedFile,
   buildFileContextText,
 } from "@/components/chat/file-attachments";
+import {
+  compareToChatStorageKey,
+  type CompareToChatHandoff,
+} from "@/lib/compare/to-chat-handoff";
 
 function resolveCompareProjectId(selected: string): string | null {
   return !selected || selected === STANDALONE_PROJECT_VALUE ? null : selected;
@@ -134,6 +138,47 @@ type CompareRound = {
 /** Stable per-model identifier used by the "Continue with this model" toggle. */
 function modelKeyOf(provider: string, model: string): string {
   return `${provider}::${model}`;
+}
+
+type CompareLaneMeta = {
+  provider: string;
+  model: string;
+  position: number;
+  key: string;
+};
+
+type CompareStreamMeta = {
+  conversation_id: string;
+  lanes?: CompareLaneMeta[];
+  round_kind?: "main" | "branch";
+  round_index?: number;
+};
+
+function responsesFromServerLanes(lanes: CompareLaneMeta[]): ResponseState[] {
+  return lanes.map((l) => ({
+    key: l.key,
+    position: l.position,
+    provider: l.provider,
+    model: l.model,
+    modelLabel: getModelDisplayName(l.provider, l.model),
+    content: "",
+    status: "pending" as const,
+    error: null,
+    tokensIn: 0,
+    tokensOut: 0,
+    scores: null,
+    responseId: null,
+  }));
+}
+
+function parseCompareErrorResponse(errText: string, status: number): string {
+  try {
+    const j = JSON.parse(errText) as { error?: string };
+    if (j.error) return j.error;
+  } catch {
+    /* plain text */
+  }
+  return errText || `Request failed (${status})`;
 }
 
 interface CompareUIProps {
@@ -614,11 +659,35 @@ export function CompareUI({
     setPhase("idle");
   }
 
+  const applyServerAllocatedRound = useCallback(
+    (
+      roundIndex: number,
+      promptText: string,
+      lanes: CompareLaneMeta[],
+      kind: "main" | "branch"
+    ) => {
+      const round: CompareRound = {
+        prompt: promptText,
+        responses: responsesFromServerLanes(lanes),
+        kind,
+      };
+      const cur = [...roundsRef.current];
+      if (roundIndex < cur.length) {
+        cur[roundIndex] = round;
+      } else {
+        cur.push(round);
+      }
+      roundsRef.current = cur;
+      setRounds(cur);
+    },
+    []
+  );
+
   const consumeSseStream = useCallback(
     async (
       res: Response,
       opts: {
-        onMeta?: (conversationId: string) => void;
+        onMeta?: (meta: CompareStreamMeta) => void;
         filterKey?: string | null;
         /**
          * Message to write into lanes that are still pending/streaming
@@ -670,7 +739,20 @@ export function CompareUI({
         try {
           const obj = JSON.parse(line.slice(6));
           if (obj.type === "meta" && obj.conversation_id && opts.onMeta) {
-            opts.onMeta(obj.conversation_id as string);
+            opts.onMeta({
+              conversation_id: obj.conversation_id as string,
+              lanes: Array.isArray(obj.lanes)
+                ? (obj.lanes as CompareLaneMeta[])
+                : undefined,
+              round_kind:
+                obj.round_kind === "branch" || obj.round_kind === "main"
+                  ? obj.round_kind
+                  : undefined,
+              round_index:
+                typeof obj.round_index === "number"
+                  ? obj.round_index
+                  : undefined,
+            });
             return;
           }
           switch (obj.type) {
@@ -926,9 +1008,12 @@ export function CompareUI({
 
     let streamedConversationId: string | null = null;
     await consumeSseStream(res, {
-      onMeta: (id) => {
-        streamedConversationId = id;
-        setConversationId(id);
+      onMeta: (meta) => {
+        streamedConversationId = meta.conversation_id;
+        setConversationId(meta.conversation_id);
+        if (meta.lanes?.length) {
+          applyServerAllocatedRound(0, effectivePrompt, meta.lanes, "main");
+        }
       },
       abortedMessage:
         "Stopped waiting on this model — it did not respond in time.",
@@ -1030,6 +1115,33 @@ export function CompareUI({
     }
   }
 
+  function continueModelToChat(r: ResponseState, roundPrompt: string) {
+    if (!r.content.trim() || r.status !== "done" || r.error) return;
+    const nonce =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `handoff-${Date.now()}`;
+    const handoff: CompareToChatHandoff = {
+      provider: r.provider,
+      model: r.model,
+      comparePrompt: roundPrompt,
+      compareResponse: r.content,
+      projectId: resolveCompareProjectId(selectedProjectId),
+      tone: selectedTone,
+      pristineCompareThread: true,
+    };
+    try {
+      sessionStorage.setItem(
+        compareToChatStorageKey(nonce),
+        JSON.stringify(handoff)
+      );
+    } catch {
+      setGlobalError("Could not start chat handoff (storage unavailable).");
+      return;
+    }
+    router.push(`/chat?fromCompare=1&h=${encodeURIComponent(nonce)}`);
+  }
+
   /**
    * Main follow-up. Only fires for models marked "Continue with this
    * model" on at least one prior response. Models opted out are kept in
@@ -1073,41 +1185,13 @@ export function CompareUI({
     setFollowUpInFlight(true);
     setMainBatchStreaming(true);
 
-    const startPos =
-      Math.max(
-        -1,
-        ...roundsRef.current.flatMap((round) =>
-          round.responses.map((x) => x.position)
-        )
-      ) + 1;
-
     const model_ids = participants.map((m) => ({
       provider: m.provider,
       model: m.modelId,
     }));
 
-    const initial: ResponseState[] = participants.map((m, i) => ({
-      key: `${m.provider}::${m.modelId}::${startPos + i}`,
-      position: startPos + i,
-      provider: m.provider,
-      model: m.modelId,
-      modelLabel: getModelDisplayName(m.provider, m.modelId),
-      content: "",
-      status: "pending",
-      error: null,
-      tokensIn: 0,
-      tokensOut: 0,
-      scores: null,
-      responseId: null,
-    }));
-
-    const appended: CompareRound[] = [
-      ...roundsRef.current,
-      { prompt: followUpPrompt.trim(), responses: initial, kind: "main" },
-    ];
-    roundsRef.current = appended;
-    setRounds(appended);
-    const followUpRoundIndex = appended.length - 1;
+    const followUpPromptText = followUpPrompt.trim();
+    const followUpRoundIndex = roundsRef.current.length;
 
     const controller = new AbortController();
     mainBatchAbortRef.current = controller;
@@ -1136,34 +1220,44 @@ export function CompareUI({
       setFollowUpInFlight(false);
       setMainBatchStreaming(false);
       mainBatchAbortRef.current = null;
-      const rolled = roundsRef.current.slice(0, -1);
-      roundsRef.current = rolled;
-      setRounds(rolled);
       return;
     }
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
-      setGlobalError(errText || `Request failed (${res.status})`);
+      setGlobalError(parseCompareErrorResponse(errText, res.status));
       setFollowUpInFlight(false);
       setMainBatchStreaming(false);
       mainBatchAbortRef.current = null;
-      const rolled = roundsRef.current.slice(0, -1);
-      roundsRef.current = rolled;
-      setRounds(rolled);
       return;
     }
 
+    let roundProvisioned = false;
     await consumeSseStream(res, {
-      onMeta: (id) => {
-        activeConversationId = id;
-        setConversationId(id);
+      onMeta: (meta) => {
+        activeConversationId = meta.conversation_id;
+        setConversationId(meta.conversation_id);
+        if (meta.lanes?.length) {
+          applyServerAllocatedRound(
+            followUpRoundIndex,
+            followUpPromptText,
+            meta.lanes,
+            meta.round_kind === "branch" ? "branch" : "main"
+          );
+          roundProvisioned = true;
+        }
       },
       abortedMessage:
         "Stopped waiting on this model — it did not respond in time.",
     });
     mainBatchAbortRef.current = null;
     setMainBatchStreaming(false);
+
+    if (!roundProvisioned) {
+      setGlobalError("Follow-up could not start — server did not assign lanes.");
+      setFollowUpInFlight(false);
+      return;
+    }
 
     try {
       await persistRoundAndAttachIds(activeConversationId, followUpRoundIndex);
@@ -1200,40 +1294,13 @@ export function CompareUI({
     setAskingModelKey(mk);
     setGlobalError(null);
 
-    const startPos =
-      Math.max(
-        -1,
-        ...roundsRef.current.flatMap((round) =>
-          round.responses.map((x) => x.position)
-        )
-      ) + 1;
-
-    const initialRow: ResponseState = {
-      key: `${provider}::${modelId}::${startPos}`,
-      position: startPos,
-      provider,
-      model: modelId,
-      modelLabel: getModelDisplayName(provider, modelId),
-      content: "",
-      status: "pending",
-      error: null,
-      tokensIn: 0,
-      tokensOut: 0,
-      scores: null,
-      responseId: null,
-    };
-
-    const appended: CompareRound[] = [
-      ...roundsRef.current,
-      { prompt: branchPrompt.trim(), responses: [initialRow], kind: "branch" },
-    ];
-    roundsRef.current = appended;
-    setRounds(appended);
-    const branchRoundIndex = appended.length - 1;
+    const branchPromptText = branchPrompt.trim();
+    const branchRoundIndex = roundsRef.current.length;
 
     const controller = new AbortController();
     branchAskAbortRef.current = controller;
 
+    let activeConversationId = conversationId;
     let res: Response;
     try {
       res = await fetch("/api/compare", {
@@ -1255,33 +1322,44 @@ export function CompareUI({
       }
       setAskingModelKey(null);
       branchAskAbortRef.current = null;
-      const rolled = roundsRef.current.slice(0, -1);
-      roundsRef.current = rolled;
-      setRounds(rolled);
       return;
     }
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
-      setGlobalError(errText || `Request failed (${res.status})`);
+      setGlobalError(parseCompareErrorResponse(errText, res.status));
       setAskingModelKey(null);
       branchAskAbortRef.current = null;
-      const rolled = roundsRef.current.slice(0, -1);
-      roundsRef.current = rolled;
-      setRounds(rolled);
       return;
     }
 
+    let roundProvisioned = false;
     await consumeSseStream(res, {
-      onMeta: (id) => {
-        setConversationId(id);
+      onMeta: (meta) => {
+        activeConversationId = meta.conversation_id;
+        setConversationId(meta.conversation_id);
+        if (meta.lanes?.length) {
+          applyServerAllocatedRound(
+            branchRoundIndex,
+            branchPromptText,
+            meta.lanes,
+            "branch"
+          );
+          roundProvisioned = true;
+        }
       },
       abortedMessage:
         "Stopped waiting on this model — it did not respond in time.",
     });
     branchAskAbortRef.current = null;
 
-    await persistRoundAndAttachIds(null, branchRoundIndex);
+    if (!roundProvisioned) {
+      setGlobalError("Ask this model could not start — server did not assign lanes.");
+      setAskingModelKey(null);
+      return;
+    }
+
+    await persistRoundAndAttachIds(activeConversationId, branchRoundIndex);
     setAskingModelKey(null);
   }
 
@@ -1291,13 +1369,6 @@ export function CompareUI({
     }
     return prompt;
   }
-
-  // NOTE: "Continue in Chat" was removed in Session 12 — the receiving
-  // Chat page wasn't loading the handoff payload reliably, so the tab
-  // opened blank. The Compare→Chat handoff helper is still exported from
-  // lib/compare/to-chat-handoff.ts for a future restore once the Chat
-  // page is fixed. For now users stay inside Compare and use
-  // "Ask this model" for per-lane follow-ups.
 
   async function retryOne(r: ResponseState) {
     const roundPrompt = promptForResponseKey(r.key);
@@ -2011,12 +2082,15 @@ export function CompareUI({
                           ? () => void retryOne(r)
                           : undefined
                       }
-                      // "Continue in Chat" is hidden until context-transfer
-                      // is fixed — for now keep users inside Compare and
-                      // use "Ask this model" instead. The handoff payload
-                      // builder (`continueModelToChat`) is intentionally
-                      // left in place for the future restore.
-                      onContinueInChat={undefined}
+                      onContinueInChat={
+                        isComplete && conversationId && !retryingKey
+                          ? () =>
+                              continueModelToChat(
+                                r,
+                                promptForResponseKey(r.key)
+                              )
+                          : undefined
+                      }
                       useInSynthesis={
                         isComplete
                           ? {

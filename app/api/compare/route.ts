@@ -515,9 +515,26 @@ export async function POST(req: NextRequest) {
     );
 
     if (allocErr || !allocData?.length) {
+      const allocMsg = (allocErr?.message ?? "").toLowerCase();
+      const rpcMissing =
+        allocErr &&
+        (allocErr.code === "42883" ||
+          (allocMsg.includes("compare_alloc_next_round") &&
+            (allocMsg.includes("does not exist") ||
+              allocMsg.includes("could not find") ||
+              allocMsg.includes("undefined function"))));
+      if (rpcMissing) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "Compare follow-ups need a database update. Apply migration 029_compare_round_position_lock.sql to your Supabase project.",
+          }),
+          { status: 503 }
+        );
+      }
       return new Response(
         JSON.stringify({
-          error: `Failed to allocate compare round (run migration 029?): ${
+          error: `Failed to allocate compare round: ${
             allocErr?.message ?? "unknown"
           }`,
         }),
@@ -662,6 +679,15 @@ export async function POST(req: NextRequest) {
         conversation_id: conversationId,
         is_retry: isRetry,
         is_follow_up: isFollowUp,
+        is_ask_model: isAskModel,
+        round_index: insertRoundIndex,
+        round_kind: insertRoundKind,
+        lanes: modelIds.map((spec, i) => ({
+          provider: spec.provider,
+          model: spec.model,
+          position: positions[i]!,
+          key: `${spec.provider}::${spec.model}::${positions[i]!}`,
+        })),
       });
 
       // Per-model isolated thread history. CRITICAL: a model NEVER sees

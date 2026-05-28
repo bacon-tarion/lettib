@@ -176,9 +176,9 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
   const lastUserInputRef = useRef<string>("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const startTimeRef = useRef<number>(0);
-  const sessionHydratedRef = useRef(false);
-  const urlConversationAttemptedRef = useRef(false);
+  const sessionStorageRestoreDoneRef = useRef(false);
   const dbHydratedConversationRef = useRef<string | null>(null);
+  const conversationParam = searchParams.get("conversation");
 
   async function hydrateConversationFromDb(cid: string, showBanner: boolean) {
     if (dbHydratedConversationRef.current === cid) return;
@@ -329,26 +329,29 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
     const projectParam = searchParams.get("project");
     if (projectParam && projects.some((p) => p.id === projectParam)) {
       setSelectedProjectId(projectParam);
-      setConversationId(null);
-      setMessages([]);
-      sessionHydratedRef.current = true;
-      router.replace("/chat");
+      if (!conversationParam) {
+        setConversationId(null);
+        setMessages([]);
+        dbHydratedConversationRef.current = null;
+        router.replace("/chat");
+      }
     }
-  }, [searchParams, projects, router, setMessages]);
+  }, [searchParams, projects, router, setMessages, conversationParam]);
 
   useEffect(() => {
     if (searchParams.get("fromCompare") === "1") return;
-    const cid = searchParams.get("conversation");
-    if (!cid || urlConversationAttemptedRef.current) return;
-    urlConversationAttemptedRef.current = true;
-    sessionHydratedRef.current = true;
+    const cid = conversationParam?.trim();
+    if (!cid) {
+      dbHydratedConversationRef.current = null;
+      return;
+    }
+    if (dbHydratedConversationRef.current === cid) return;
 
     void (async () => {
-      sessionHydratedRef.current = true;
-      await hydrateConversationFromDb(cid, true);
-      router.replace("/chat");
+      await hydrateConversationFromDb(cid, false);
+      dbHydratedConversationRef.current = cid;
     })();
-  }, [searchParams, router, projects, modelOptions]);
+  }, [conversationParam, searchParams, projects, modelOptions]);
 
   useEffect(() => {
     if (searchParams.get("fromCompare") !== "1") return;
@@ -424,15 +427,20 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
             }),
           });
           const data = await res.json();
-          if (data.conversation_id) setConversationId(data.conversation_id);
+          if (data.conversation_id) {
+            setConversationId(data.conversation_id);
+            dbHydratedConversationRef.current = data.conversation_id;
+            router.replace(`/chat?conversation=${data.conversation_id}`);
+          } else {
+            router.replace("/chat");
+          }
         } catch {
-          /* non-fatal */
+          router.replace("/chat");
         }
       })();
+    } else {
+      router.replace("/chat");
     }
-
-    sessionHydratedRef.current = true;
-    router.replace("/chat");
   }, [
     searchParams,
     router,
@@ -442,9 +450,11 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
   ]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || sessionHydratedRef.current) return;
+    if (typeof window === "undefined") return;
     if (searchParams.get("fromCompare") === "1") return;
-    if (searchParams.get("conversation")) return;
+    if (conversationParam) return;
+    if (sessionStorageRestoreDoneRef.current) return;
+    sessionStorageRestoreDoneRef.current = true;
     try {
       const raw = sessionStorage.getItem(LETTIB_STATE_CHAT);
       if (!raw) return;
@@ -454,7 +464,6 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
         sessionStorage.removeItem(LETTIB_STATE_CHAT);
         return;
       }
-      sessionHydratedRef.current = true;
       setMessages(p.messages);
       if (p.selectedModelValue && modelOptions.some((o) => o.value === p.selectedModelValue)) {
         setSelectedModelValue(p.selectedModelValue);
@@ -514,13 +523,17 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
     setSelectedModelValue(value);
     setConversationId(null);
     setMessages([]);
+    dbHydratedConversationRef.current = null;
+    router.replace("/chat");
   }
 
   function onProjectChange(value: string) {
     setSelectedProjectId(value);
     setConversationId(null);
     setMessages([]);
+    dbHydratedConversationRef.current = null;
     setShowOrganizer(false);
+    router.replace("/chat");
     setSelectedProjectFileIds([]);
   }
 

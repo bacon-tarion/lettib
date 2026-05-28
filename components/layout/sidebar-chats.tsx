@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { MessageSquare, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,8 @@ type StandaloneChat = {
 
 export function SidebarChats() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const activeConversationId = searchParams.get("conversation");
   const [chats, setChats] = useState<StandaloneChat[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -36,7 +38,7 @@ export function SidebarChats() {
     return () => {
       cancelled = true;
     };
-  }, [pathname]);
+  }, [pathname, activeConversationId]);
 
   return (
     <div className="pt-2">
@@ -57,7 +59,8 @@ export function SidebarChats() {
       ) : (
         <div className="space-y-0.5">
           {chats.map((c) => {
-            const active = pathname === `/chat/${c.id}`;
+            const active =
+              pathname === "/chat" && activeConversationId === c.id;
             return (
               <Link
                 key={c.id}
