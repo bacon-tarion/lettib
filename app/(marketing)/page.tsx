@@ -11,9 +11,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { PricingGrid } from "./_components/pricing-grid";
 import { PRICING_USD, COMPARE_MODELS_BY_PLAN } from "@/lib/pricing";
-import { getServerStripeCheckoutPrices } from "@/lib/stripe/checkout-config";
+import { PricingCards } from "./pricing/pricing-cards";
 
 const PROBLEMS = [
   {
@@ -99,7 +98,6 @@ const FAQ = [
 ];
 
 export default function LandingPage() {
-  const checkoutPrices = getServerStripeCheckoutPrices();
   return (
     <div className="bg-background text-foreground">
       {/* Hero */}
@@ -248,7 +246,7 @@ export default function LandingPage() {
               Free forever with BYOK. Upgrade when you need more models and projects.
             </p>
           </div>
-          <PricingGrid checkoutPrices={checkoutPrices} />
+          <PricingCards />
           <p className="text-center text-xs text-muted-foreground">
             All paid plans are BYOK — you pay AI providers directly. LettiB charges
             only for the workspace (${PRICING_USD.proMonthly}/mo Pro, $

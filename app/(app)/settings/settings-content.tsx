@@ -1,27 +1,17 @@
 "use client";
 
 import { Suspense, useState, useEffect, useCallback, useTransition } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ShieldCheck, BellRing, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
+import { ShieldCheck, BellRing, Loader2, CheckCircle2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiKeyTile } from "@/components/settings/api-key-tile";
 import type { ApiConnection } from "./actions";
 import { updateUsageAlertThresholdCents } from "./actions";
-import { SubscriptionUpgradePanel } from "@/components/billing/subscription-upgrade-panel";
-import { PRICING_USD } from "@/lib/pricing";
-import { tierDisplayName } from "@/lib/subscription/tier";
-import type { StripeCheckoutPrices } from "@/lib/stripe/checkout-config";
+import { SubscriptionTab } from "./subscription-tab";
 
-// Per-provider config. `consoleUrl` points at each provider's API-key
-// dashboard; the tile renders a small "Get your API key →" link out to it
-// in a new tab (target="_blank", rel="noopener noreferrer"). Custom
-// providers have no canonical console, so `consoleUrl` is null there.
 const PROVIDERS: {
   id: string;
   label: string;
@@ -77,14 +67,10 @@ interface SettingsContentProps {
   initialConnections: ApiConnection[];
   userEmail: string;
   userName: string;
-  /** Per-user 30-day spend-alert step in cents (default 1000 = $10). */
   initialUsageAlertThresholdCents: number;
   subscriptionTier?: string;
-  subscriptionStatus?: string;
-  currentPeriodEnd?: string | null;
   defaultTab?: string;
   showCheckoutSuccess?: boolean;
-  checkoutPrices: StripeCheckoutPrices;
 }
 
 function SettingsContentInner({
@@ -93,22 +79,13 @@ function SettingsContentInner({
   userName,
   initialUsageAlertThresholdCents,
   subscriptionTier = "free",
-  subscriptionStatus = "active",
-  currentPeriodEnd = null,
   defaultTab = "api-keys",
   showCheckoutSuccess = false,
-  checkoutPrices,
 }: SettingsContentProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const checkoutSuccessBanner =
-    showCheckoutSuccess || searchParams.get("success") === "1";
   const [connections, setConnections] = useState(initialConnections);
   const [displayName, setDisplayName] = useState(userName);
-
-  // Threshold is edited in DOLLARS in the UI but stored in CENTS on the
-  // server (matches the DB column + the toast copy). We keep a string state
-  // so the user can clear the field while typing without snapping to 0.
   const [thresholdDollars, setThresholdDollars] = useState<string>(
     (initialUsageAlertThresholdCents / 100).toFixed(2)
   );
@@ -116,7 +93,6 @@ function SettingsContentInner({
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [thresholdSaving, startThresholdSave] = useTransition();
   const [activeTab, setActiveTab] = useState(defaultTab);
-  const [syncBillingLoading, setSyncBillingLoading] = useState(false);
 
   useEffect(() => {
     const tab = searchParams.get("tab");
@@ -127,14 +103,6 @@ function SettingsContentInner({
     setActiveTab(defaultTab);
   }, [defaultTab]);
 
-  const tierLabel = tierDisplayName(subscriptionTier);
-  const isLifetime = subscriptionTier === "lifetime_byok";
-  const isTrialing = subscriptionStatus === "trialing";
-  const isSubscribed =
-    subscriptionTier === "pro" || subscriptionTier === "power";
-  const isFree = subscriptionTier === "free";
-
-  // Sync when the server re-renders after router.refresh()
   useEffect(() => {
     setConnections(initialConnections);
   }, [initialConnections]);
@@ -148,26 +116,6 @@ function SettingsContentInner({
   }, [initialUsageAlertThresholdCents]);
 
   const refresh = useCallback(() => router.refresh(), [router]);
-
-  async function handleSyncBilling() {
-    setSyncBillingLoading(true);
-    try {
-      const res = await fetch("/api/stripe/sync-tier", { method: "POST" });
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        tier?: string;
-      };
-      if (!res.ok) {
-        throw new Error(data.error ?? "Could not sync billing.");
-      }
-      toast.success(`Billing synced — plan is now ${tierDisplayName(data.tier)}.`);
-      refresh();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not sync billing.");
-    } finally {
-      setSyncBillingLoading(false);
-    }
-  }
 
   function handleSaveThreshold() {
     setThresholdError(null);
@@ -206,7 +154,6 @@ function SettingsContentInner({
           <TabsTrigger value="privacy">Privacy</TabsTrigger>
         </TabsList>
 
-        {/* ── API Keys ── */}
         <TabsContent value="api-keys" className="mt-4 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {PROVIDERS.map((p) => {
@@ -237,7 +184,6 @@ function SettingsContentInner({
           </div>
         </TabsContent>
 
-        {/* ── Alerts (Session 10) ── */}
         <TabsContent value="alerts" className="mt-4 space-y-4 max-w-sm">
           <div className="flex items-start gap-2.5 rounded-lg border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
             <BellRing className="h-4 w-4 shrink-0 mt-0.5 text-primary" />
@@ -299,7 +245,6 @@ function SettingsContentInner({
           </div>
         </TabsContent>
 
-        {/* ── Account ── */}
         <TabsContent value="account" className="mt-4 space-y-4 max-w-sm">
           <div className="space-y-1.5">
             <Label>Display Name</Label>
@@ -319,98 +264,13 @@ function SettingsContentInner({
           <Button size="sm">Save Changes</Button>
         </TabsContent>
 
-        {/* ── Subscription ── */}
         <TabsContent value="subscription" className="mt-4 space-y-4">
-          {checkoutSuccessBanner && (
-            <div
-              className="rounded-lg border border-green-500/40 bg-green-500/10 px-4 py-3 text-sm text-foreground"
-              role="status"
-            >
-              Welcome to {tierLabel}! Your plan is now active.
-            </div>
-          )}
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-sm font-medium text-muted-foreground">
-              Current plan
-            </span>
-            <Badge className="text-sm px-3 py-1">{tierLabel}</Badge>
-            {isLifetime && (
-              <Badge variant="secondary" className="text-sm px-3 py-1">
-                Lifetime member
-              </Badge>
-            )}
-          </div>
-          {isTrialing && currentPeriodEnd && (
-            <p className="text-sm text-amber-600 dark:text-amber-500">
-              Trial ends{" "}
-              {new Date(currentPeriodEnd).toLocaleDateString(undefined, {
-                dateStyle: "medium",
-              })}
-            </p>
-          )}
-          {isSubscribed && !isTrialing && currentPeriodEnd && (
-            <p className="text-sm text-muted-foreground">
-              Renews{" "}
-              {new Date(currentPeriodEnd).toLocaleDateString(undefined, {
-                dateStyle: "medium",
-              })}
-            </p>
-          )}
-          {isFree && (
-            <p className="text-sm text-muted-foreground">
-              Upgrade to unlock more compare models, unlimited projects, and
-              synthesis.
-            </p>
-          )}
-          <p className="text-sm text-muted-foreground">
-            Plans: Free (${PRICING_USD.free}), Pro (${PRICING_USD.proMonthly}
-            /mo), Power (${PRICING_USD.powerMonthly}/mo), Lifetime BYOK ($
-            {PRICING_USD.lifetimeByok} one-time). See{" "}
-            <Link
-              href="/pricing"
-              className="text-foreground underline underline-offset-4 hover:text-primary"
-            >
-              pricing
-            </Link>
-            .
-          </p>
-          {isFree ? (
-            <Button variant="default" asChild>
-              <Link href="/pricing">View all plans</Link>
-            </Button>
-          ) : (
-            <SubscriptionUpgradePanel
-              currentTier={subscriptionTier}
-              checkoutPrices={checkoutPrices}
-            />
-          )}
-          <div className="pt-2 border-t border-border">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={syncBillingLoading}
-              onClick={() => void handleSyncBilling()}
-            >
-              {syncBillingLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  Syncing…
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  Sync billing
-                </>
-              )}
-            </Button>
-            <p className="text-xs text-muted-foreground mt-2">
-              If your plan looks wrong after checkout, sync from Stripe.
-            </p>
-          </div>
+          <SubscriptionTab
+            subscriptionTier={subscriptionTier}
+            showCheckoutSuccess={showCheckoutSuccess}
+          />
         </TabsContent>
 
-        {/* ── Privacy ── */}
         <TabsContent value="privacy" className="mt-4 space-y-4">
           <p className="text-sm text-muted-foreground">
             Permanently delete your account and all associated data. This

@@ -1,49 +1,15 @@
 import Link from "next/link";
-import { PricingGrid } from "../_components/pricing-grid";
+import { PricingCards } from "./pricing-cards";
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
 import { PRICING_USD } from "@/lib/pricing";
-import { getServerStripeCheckoutPrices } from "@/lib/stripe/checkout-config";
-import { createClient } from "@/lib/supabase/server";
 
 export const metadata = {
   title: "Pricing — LettiB",
   description: `Simple BYOK pricing for the LettiB multi-AI workspace. Free ($${PRICING_USD.free} forever), Pro ($${PRICING_USD.proMonthly}/mo), Power ($${PRICING_USD.powerMonthly}/mo), and Lifetime BYOK ($${PRICING_USD.lifetimeByok} one-time).`,
 };
 
-/** Optional: current tier for logged-in users only; never throws. */
-async function getCurrentTierOptional(): Promise<string | undefined> {
-  try {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-    const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
-    if (!url || !key) return undefined;
-
-    const supabase = await createClient();
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-    if (authError || !user) return undefined;
-
-    const { data, error: profileError } = await supabase
-      .from("profiles")
-      .select("tier")
-      .eq("id", user.id)
-      .maybeSingle();
-    if (profileError) return undefined;
-
-    return (data as { tier: string } | null)?.tier;
-  } catch (e) {
-    console.error("[pricing] optional auth/tier lookup failed:", e);
-    return undefined;
-  }
-}
-
-export default async function PricingPage() {
-  const currentTier = await getCurrentTierOptional();
-
-  const checkoutPrices = getServerStripeCheckoutPrices();
-
+export default function PricingPage() {
   return (
     <div className="bg-background text-foreground min-h-screen">
       <section className="border-b border-border">
@@ -59,10 +25,7 @@ export default async function PricingPage() {
 
       <section>
         <div className="mx-auto max-w-6xl px-4 py-16">
-          <PricingGrid
-            currentTier={currentTier}
-            checkoutPrices={checkoutPrices}
-          />
+          <PricingCards />
           <p className="mt-8 text-center text-xs text-muted-foreground">
             All plans require your own provider API keys (OpenAI, Anthropic,
             Google, xAI (Grok)). You&apos;re billed by the providers for their
