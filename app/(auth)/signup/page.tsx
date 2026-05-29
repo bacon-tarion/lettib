@@ -1,9 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { useFormState, useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signUp } from "@/app/actions/auth";
@@ -19,7 +27,11 @@ function SubmitButton() {
 
 const initialState = { error: undefined as string | undefined };
 
-export default function SignupPage() {
+function SignupForm() {
+  const searchParams = useSearchParams();
+  const plan = searchParams.get("plan");
+  const validPlan =
+    plan === "pro" || plan === "power" || plan === "lifetime" ? plan : null;
   const [state, formAction] = useFormState(signUp, initialState);
 
   return (
@@ -32,6 +44,9 @@ export default function SignupPage() {
       </CardHeader>
       <CardContent>
         <form action={formAction} className="space-y-4">
+          {validPlan && (
+            <input type="hidden" name="plan" value={validPlan} />
+          )}
           {state?.error && (
             <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2 text-sm text-destructive">
               {state.error}
@@ -89,5 +104,21 @@ export default function SignupPage() {
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense
+      fallback={
+        <Card className="w-full max-w-sm shadow-sm">
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            Loading…
+          </CardContent>
+        </Card>
+      }
+    >
+      <SignupForm />
+    </Suspense>
   );
 }

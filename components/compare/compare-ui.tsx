@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { toast } from "sonner";
 import { Loader2, Scale, Sparkles, Zap, Settings, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ClearableTextarea } from "@/components/ui/clearable-textarea";
@@ -40,6 +41,9 @@ import {
   WebSearchToggle,
 } from "@/components/web-search/toggle";
 import type { CompareProject, CompareConnection } from "@/app/(app)/compare/page";
+import {
+  compareModelLimitError,
+} from "@/lib/subscription/tier";
 import { STANDALONE_PROJECT_VALUE } from "@/components/chat/chat-organizer";
 import {
   FileAttachments,
@@ -187,6 +191,8 @@ interface CompareUIProps {
   teams: Team[];
   /** Max models selectable at once for the user's subscription tier. */
   maxCompareModels: number;
+  /** Canonical `profiles.tier` value for limit messaging. */
+  subscriptionTier: string;
 }
 
 function snapshotRowToState(
@@ -214,6 +220,7 @@ export function CompareUI({
   connections,
   teams,
   maxCompareModels,
+  subscriptionTier,
 }: CompareUIProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -251,6 +258,15 @@ export function CompareUI({
   const [titleEditing, setTitleEditing] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useWebSearchPreference();
   const modelCap = Math.min(maxCompareModels, MAX_COMPARE_PARALLEL_MODELS);
+
+  const showCompareModelLimitToast = useCallback(() => {
+    toast.error(compareModelLimitError(subscriptionTier), {
+      action: {
+        label: "Upgrade",
+        onClick: () => router.push("/pricing"),
+      },
+    });
+  }, [router, subscriptionTier]);
 
   const [selectedValues, setSelectedValues] = useState<Set<string>>(() => {
     const s = new Set<string>();
@@ -631,6 +647,11 @@ export function CompareUI({
     const allowed = new Set(modelPicks.map((p) => p.value));
     const next: string[] = [];
     const sorted = [...team.members].sort((a, b) => a.position - b.position);
+    let teamModelCount = 0;
+    for (const m of sorted) {
+      const v = `${m.provider}::${m.model}`;
+      if (allowed.has(v)) teamModelCount++;
+    }
     for (const m of sorted) {
       const v = `${m.provider}::${m.model}`;
       if (allowed.has(v)) {
@@ -638,18 +659,24 @@ export function CompareUI({
         if (next.length >= modelCap) break;
       }
     }
+    if (teamModelCount > modelCap) {
+      showCompareModelLimitToast();
+    }
     setSelectedValues(new Set(next));
   }
 
   function toggleModel(value: string) {
     setTeamPresetId("manual");
+    if (!selectedValues.has(value) && selectedValues.size >= modelCap) {
+      showCompareModelLimitToast();
+      return;
+    }
     setSelectedValues((prev) => {
       const next = new Set(prev);
       if (next.has(value)) {
         next.delete(value);
         return next;
       }
-      if (next.size >= modelCap) return prev;
       next.add(value);
       return next;
     });
@@ -1892,8 +1919,6 @@ export function CompareUI({
           {modelPicks.map((p) => {
             const checked = selectedValues.has(p.value);
             const warningNote = getModelWarningNote(p.modelId);
-            const atCap =
-              selectedValues.size >= modelCap && !checked;
             return (
               <label
                 key={p.value}
@@ -1901,16 +1926,13 @@ export function CompareUI({
                   "flex items-center gap-2 text-xs cursor-pointer rounded-md border px-2 py-1.5",
                   checked
                     ? "border-primary bg-primary/5"
-                    : atCap
-                      ? "opacity-50 cursor-not-allowed"
-                      : "border-border hover:bg-muted/50"
+                    : "border-border hover:bg-muted/50"
                 )}
               >
                 <input
                   type="checkbox"
                   className="rounded border-muted-foreground"
                   checked={checked}
-                  disabled={atCap}
                   onChange={() => toggleModel(p.value)}
                 />
                 <span className="inline-flex flex-wrap items-baseline gap-x-1">

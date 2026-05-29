@@ -7,7 +7,6 @@ import {
   Copy,
   RefreshCw,
   FolderInput,
-  Link2,
   ThumbsUp,
   ThumbsDown,
   Check,
@@ -235,10 +234,7 @@ export function SynthesisActions({
               <FolderInput className="h-4 w-4" />
               Save to Project
             </Button>
-            <Button variant="outline" size="sm" className="gap-1.5" disabled title="Coming soon">
-              <Link2 className="h-4 w-4" />
-              Share link
-            </Button>
+            {shareSlot}
           </div>
 
           {conversationId && (
@@ -279,7 +275,6 @@ export function SynthesisActions({
             <p className="text-xs text-destructive">{regenError}</p>
           )}
         </div>
-        {shareSlot}
       </div>
     </>
   );

@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils";
 import { SynthesisActions } from "./synthesis-actions";
 import { ConflictResolver } from "@/components/synthesis/conflict-resolver";
 import { SynthesisView } from "@/components/synthesis/synthesis-view";
+import { ShareDialog } from "@/components/synthesis/share-dialog";
+import { getUserSubscription } from "@/lib/subscription/tier";
 import type { Conflict } from "@/lib/synthesis/lineage";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +43,7 @@ export default async function SynthesisPage({
   const { data: synth } = await serviceClient
     .from("syntheses")
     .select(
-      "id, user_id, conversation_id, project_id, prompt, content, detailed_content, clean_content, clean_cost_usd, provider, model, mode, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, score, user_feedback, conflict_resolutions"
+      "id, user_id, conversation_id, project_id, prompt, content, detailed_content, clean_content, clean_cost_usd, provider, model, mode, tone, tokens_in, tokens_out, cost_usd, latency_ms, source_response_ids, created_at, score, user_feedback, conflict_resolutions, is_public, share_token"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -72,6 +74,8 @@ export default async function SynthesisPage({
     score: number | null;
     user_feedback: string | null;
     conflict_resolutions: (Conflict & { chosen: string | null })[] | null;
+    is_public: boolean;
+    share_token: string | null;
   };
 
   const conflicts = synthesis.conflict_resolutions ?? [];
@@ -135,6 +139,8 @@ export default async function SynthesisPage({
   } else if (synthesis.mode === "manual") {
     compareKeyMode = "manual";
   }
+
+  const { tier } = await getUserSubscription(user.id);
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -236,6 +242,14 @@ export default async function SynthesisPage({
         compareKeyMode={compareKeyMode}
         initialTone={synthesis.tone}
         projectId={synthesis.project_id}
+        shareSlot={
+          <ShareDialog
+            synthesisId={synthesis.id}
+            initialIsPublic={synthesis.is_public}
+            initialShareToken={synthesis.share_token}
+            userTier={tier}
+          />
+        }
       />
     </div>
   );

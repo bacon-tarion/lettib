@@ -46,5 +46,17 @@ export function tierDisplayName(tier: string | null | undefined): string {
 export function compareModelLimitError(tier: string | null | undefined): string {
   const name = tierDisplayName(tier);
   const n = maxCompareModelsForUser(tier);
-  return `Your ${name} plan supports up to ${n} models. Upgrade to compare more.`;
+  return `Your ${name} plan supports up to ${n} models. Upgrade to select more.`;
+}
+
+export function canUseShareLinks(tier: string | null | undefined): boolean {
+  return tier === "power" || tier === "lifetime_byok";
+}
+
+export function shareLinkTierError(): string {
+  return "Shareable links are a Power feature. Upgrade to Power or Lifetime to share synthesis results.";
+}
+
+export function synthesisLimitError(): string {
+  return "You've used all 10 free syntheses this month. Upgrade to Pro for unlimited synthesis.";
 }

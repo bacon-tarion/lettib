@@ -20,6 +20,10 @@ import { MEMORY_EXTRACTION_PROMPT } from "@/lib/prompts/memory";
 import { MEMORY_FIELDS, type MemoryFieldKey } from "@/lib/memory/fields";
 import { upsertMemoryFields } from "@/lib/memory/queries";
 import { logUsageAsync } from "@/lib/usage/log";
+import {
+  checkSynthesisQuota,
+  incrementSynthesisUsage,
+} from "@/lib/usage/synthesis-quota";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +46,11 @@ export async function POST(req: NextRequest) {
   } = await supabase.auth.getUser();
   if (authError || !user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const quota = await checkSynthesisQuota(user.id);
+  if (!quota.allowed) {
+    return NextResponse.json({ error: quota.error }, { status: 403 });
   }
 
   const body = await req.json();
@@ -369,6 +378,8 @@ export async function POST(req: NextRequest) {
       costUsd: cost,
       latencyMs: latency,
     });
+
+    await incrementSynthesisUsage(user.id);
 
     if (cleanContent) {
       logUsageAsync(serviceClient, {

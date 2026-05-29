@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -9,11 +10,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PRICING_USD, COMPARE_MODELS_BY_PLAN } from "@/lib/pricing";
 import { getStripePriceIds } from "@/lib/stripe/prices";
+import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
 const PRICES = getStripePriceIds();
 
 type BillingInterval = "monthly" | "annual";
+
+const CHECKOUT_PLANS = ["pro", "power", "lifetime"] as const;
+type CheckoutPlan = (typeof CHECKOUT_PLANS)[number];
 
 const ANNUAL = {
   pro: { yearly: 144, savings: 36, percent: 20 },
@@ -69,6 +74,30 @@ const TIERS = [
   },
 ] as const;
 
+function signupHrefForTier(key: string): string {
+  if (key === "pro") return "/signup?plan=pro";
+  if (key === "power") return "/signup?plan=power";
+  if (key === "lifetime") return "/signup?plan=lifetime";
+  return "/signup";
+}
+
+function isCheckoutPlan(plan: string): plan is CheckoutPlan {
+  return (CHECKOUT_PLANS as readonly string[]).includes(plan);
+}
+
+function priceIdForCheckoutPlan(
+  plan: CheckoutPlan,
+  interval: BillingInterval
+): string | null {
+  if (plan === "pro") {
+    return interval === "annual" ? PRICES.proAnnual : PRICES.proMonthly;
+  }
+  if (plan === "power") {
+    return interval === "annual" ? PRICES.powerAnnual : PRICES.powerMonthly;
+  }
+  return PRICES.lifetime;
+}
+
 function IntervalToggle({
   value,
   onChange,
@@ -106,9 +135,20 @@ function IntervalToggle({
   );
 }
 
-export function PricingCards() {
+function PricingCardsInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [interval, setInterval] = useState<BillingInterval>("monthly");
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
+  const checkoutPlanTriggered = useRef(false);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data }) => {
+      setIsLoggedIn(!!data.session);
+    });
+  }, []);
 
   async function handleCheckout(priceId: string, key: string) {
     setLoadingKey(key);
@@ -195,6 +235,52 @@ export function PricingCards() {
     return null;
   }
 
+  useEffect(() => {
+    const plan = searchParams.get("plan");
+    if (!plan || !isCheckoutPlan(plan) || checkoutPlanTriggered.current) {
+      return;
+    }
+    if (isLoggedIn !== true) {
+      return;
+    }
+
+    const priceId = priceIdForCheckoutPlan(plan, interval);
+    if (!priceId) {
+      return;
+    }
+
+    checkoutPlanTriggered.current = true;
+    void (async () => {
+      setLoadingKey(plan);
+      try {
+        const res = await fetch("/api/stripe/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ priceId }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          url?: string;
+          error?: string;
+          portalUrl?: string;
+        };
+        if (data.url) {
+          window.location.href = data.url;
+          return;
+        }
+        if (data.portalUrl) {
+          window.location.href = data.portalUrl;
+          return;
+        }
+        toast.error(data.error ?? "Checkout failed.");
+      } catch {
+        toast.error("Checkout failed.");
+      } finally {
+        setLoadingKey(null);
+        router.replace("/pricing");
+      }
+    })();
+  }, [searchParams, isLoggedIn, interval, router]);
+
   return (
     <div className="space-y-6">
       <IntervalToggle value={interval} onChange={setInterval} />
@@ -205,8 +291,9 @@ export function PricingCards() {
           const priceId = priceIdForTier(tier.key);
           const isLifetime = tier.key === "lifetime";
           const isFree = tier.key === "free";
-          const cardName =
-            display.label ?? tier.name;
+          const cardName = display.label ?? tier.name;
+          const signupHref = signupHrefForTier(tier.key);
+          const showSignupLink = !isFree && isLoggedIn === false;
 
           return (
             <Card
@@ -257,6 +344,22 @@ export function PricingCards() {
                   <Button asChild className="w-full" variant="outline">
                     <Link href="/signup">Start free</Link>
                   </Button>
+                ) : showSignupLink ? (
+                  <Button
+                    asChild
+                    className="w-full"
+                    variant={
+                      isLifetime || ("highlight" in tier && tier.highlight)
+                        ? "default"
+                        : "outline"
+                    }
+                  >
+                    <Link href={signupHref}>
+                      {tier.key === "lifetime"
+                        ? "Buy lifetime"
+                        : "Start 7-day free trial"}
+                    </Link>
+                  </Button>
                 ) : (
                   <Button
                     type="button"
@@ -266,7 +369,11 @@ export function PricingCards() {
                         ? "default"
                         : "outline"
                     }
-                    disabled={loadingKey !== null || !priceId}
+                    disabled={
+                      loadingKey !== null ||
+                      !priceId ||
+                      isLoggedIn === null
+                    }
                     onClick={() =>
                       priceId && void handleCheckout(priceId, tier.key)
                     }
@@ -301,5 +408,19 @@ export function PricingCards() {
         })}
       </div>
     </div>
+  );
+}
+
+export function PricingCards() {
+  return (
+    <Suspense
+      fallback={
+        <div className="py-16 text-center text-sm text-muted-foreground">
+          Loading plans…
+        </div>
+      }
+    >
+      <PricingCardsInner />
+    </Suspense>
   );
 }

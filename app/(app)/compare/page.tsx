@@ -59,6 +59,7 @@ export default async function ComparePage() {
         connections={connectionList}
         teams={teams}
         maxCompareModels={maxCompareModels}
+        subscriptionTier={tier}
       />
     </Suspense>
   );

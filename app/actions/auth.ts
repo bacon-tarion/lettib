@@ -24,6 +24,14 @@ function safeNextPath(raw: string | null): string | null {
   return t;
 }
 
+function signupRedirectPath(formData: FormData): string {
+  const plan = (formData.get("plan") as string | null)?.trim();
+  if (plan === "pro" || plan === "power" || plan === "lifetime") {
+    return `/pricing?plan=${plan}`;
+  }
+  return "/dashboard";
+}
+
 export async function signIn(_prev: unknown, formData: FormData) {
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
@@ -75,7 +83,7 @@ export async function signUp(_prev: unknown, formData: FormData) {
   // Supabase returned a session immediately (email confirmation is disabled
   // in project settings) — user is already authenticated.
   if (data.session) {
-    redirect("/dashboard");
+    redirect(signupRedirectPath(formData));
   }
 
   // No session yet means email confirmation is enabled. Attempt an immediate
@@ -88,7 +96,7 @@ export async function signUp(_prev: unknown, formData: FormData) {
   });
 
   if (!signInError) {
-    redirect("/dashboard");
+    redirect(signupRedirectPath(formData));
   }
 
   // Email confirmation is genuinely required — let the user know rather than

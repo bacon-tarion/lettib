@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Share2, Copy, Check, Globe, Lock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,13 +13,17 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  canUseShareLinks,
+  shareLinkTierError,
+} from "@/lib/subscription/tier";
 
 interface ShareDialogProps {
   synthesisId: string;
   initialIsPublic: boolean;
   initialShareToken: string | null;
+  userTier: string;
 }
 
 function buildUrl(token: string | null) {
@@ -31,8 +36,11 @@ export function ShareDialog({
   synthesisId,
   initialIsPublic,
   initialShareToken,
+  userTier,
 }: ShareDialogProps) {
+  const canShare = canUseShareLinks(userTier);
   const [open, setOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [isPublic, setIsPublic] = useState(initialIsPublic);
   const [shareToken, setShareToken] = useState<string | null>(
     initialShareToken
@@ -42,6 +50,14 @@ export function ShareDialog({
   const [copied, setCopied] = useState(false);
 
   const url = buildUrl(shareToken);
+
+  function handleShareClick() {
+    if (!canShare) {
+      setUpgradeOpen(true);
+      return;
+    }
+    setOpen(true);
+  }
 
   async function makePublic() {
     setBusy(true);
@@ -71,8 +87,6 @@ export function ShareDialog({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to disable sharing");
       setIsPublic(false);
-      // Keep shareToken in local state — server preserves it so re-enabling
-      // reuses the same URL.
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to disable sharing");
     } finally {
@@ -100,109 +114,126 @@ export function ShareDialog({
   async function handleCopyClick() {
     if (!isPublic || !shareToken) {
       await makePublic();
-      // Wait one tick for state update; copy via direct fetch result instead
-      // — re-run with the freshly-set token in next render.
       return;
     }
     await handleCopy();
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1.5">
-          <Share2 className="h-4 w-4" />
-          Share
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Share2 className="h-4 w-4" />
-            Share this synthesis
-          </DialogTitle>
-          <DialogDescription>
-            Anyone with the link can view this synthesis. No sign-in required.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="gap-1.5"
+        onClick={handleShareClick}
+      >
+        <Share2 className="h-4 w-4" />
+        Share
+      </Button>
 
-        <div className="space-y-4 pt-2">
-          <div className="flex items-center justify-between rounded-lg border p-3">
-            <div className="flex items-center gap-3">
-              {isPublic ? (
-                <Globe className="h-4 w-4 text-green-600" />
-              ) : (
-                <Lock className="h-4 w-4 text-muted-foreground" />
-              )}
-              <div className="space-y-0.5">
-                <Label htmlFor="public-toggle" className="text-sm font-medium">
-                  {isPublic ? "Public" : "Private"}
+      <Dialog open={upgradeOpen} onOpenChange={setUpgradeOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upgrade to share</DialogTitle>
+            <DialogDescription>{shareLinkTierError()}</DialogDescription>
+          </DialogHeader>
+          <Button asChild className="w-full">
+            <Link href="/pricing">View plans</Link>
+          </Button>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Share2 className="h-4 w-4" />
+              Share this synthesis
+            </DialogTitle>
+            <DialogDescription>
+              Anyone with the link can view this synthesis. No sign-in required.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="flex items-center gap-3">
+                {isPublic ? (
+                  <Globe className="h-4 w-4 text-green-600" />
+                ) : (
+                  <Lock className="h-4 w-4 text-muted-foreground" />
+                )}
+                <div className="space-y-0.5">
+                  <Label htmlFor="public-toggle" className="text-sm font-medium">
+                    {isPublic ? "Public" : "Private"}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {isPublic
+                      ? "Link is live — anyone with it can view."
+                      : "Only you can see this synthesis."}
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="public-toggle"
+                checked={isPublic}
+                disabled={busy}
+                onCheckedChange={onToggle}
+              />
+            </div>
+
+            {isPublic && url && (
+              <div className="space-y-1.5">
+                <Label htmlFor="share-url" className="text-xs">
+                  Share link
                 </Label>
-                <p className="text-xs text-muted-foreground">
-                  {isPublic
-                    ? "Link is live — anyone with it can view."
-                    : "Only you can see this synthesis."}
-                </p>
+                <div className="flex gap-2">
+                  <Input
+                    id="share-url"
+                    readOnly
+                    value={url}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="text-xs font-mono"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopy}
+                    className="gap-1.5 shrink-0"
+                  >
+                    {copied ? (
+                      <Check className="h-4 w-4 text-green-600" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                </div>
               </div>
-            </div>
-            <Switch
-              id="public-toggle"
-              checked={isPublic}
-              disabled={busy}
-              onCheckedChange={onToggle}
-            />
+            )}
+
+            {!isPublic && (
+              <Button
+                variant="default"
+                className="w-full gap-1.5"
+                onClick={handleCopyClick}
+                disabled={busy}
+              >
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Copy className="h-4 w-4" />
+                )}
+                Generate share link
+              </Button>
+            )}
+
+            {error && <p className="text-xs text-destructive">{error}</p>}
           </div>
-
-          {isPublic && url && (
-            <div className="space-y-1.5">
-              <Label htmlFor="share-url" className="text-xs">
-                Share link
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  id="share-url"
-                  readOnly
-                  value={url}
-                  onFocus={(e) => e.currentTarget.select()}
-                  className="text-xs font-mono"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCopy}
-                  className="gap-1.5 shrink-0"
-                >
-                  {copied ? (
-                    <Check className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                  {copied ? "Copied" : "Copy"}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {!isPublic && (
-            <Button
-              variant="default"
-              className="w-full gap-1.5"
-              onClick={handleCopyClick}
-              disabled={busy}
-            >
-              {busy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Copy className="h-4 w-4" />
-              )}
-              Generate share link
-            </Button>
-          )}
-
-          {error && <p className="text-xs text-destructive">{error}</p>}
-        </div>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
