@@ -79,6 +79,8 @@ interface SettingsContentProps {
   subscriptionTier?: string;
   subscriptionStatus?: string;
   currentPeriodEnd?: string | null;
+  defaultTab?: string;
+  showCheckoutSuccess?: boolean;
 }
 
 export function SettingsContent({
@@ -89,6 +91,8 @@ export function SettingsContent({
   subscriptionTier = "free",
   subscriptionStatus = "active",
   currentPeriodEnd = null,
+  defaultTab = "api-keys",
+  showCheckoutSuccess = false,
 }: SettingsContentProps) {
   const router = useRouter();
   const [connections, setConnections] = useState(initialConnections);
@@ -121,10 +125,11 @@ export function SettingsContent({
 
   const tierLabel = tierDisplayName(subscriptionTier);
   const isLifetime = subscriptionTier === "lifetime_byok";
-  const isPaid =
-    subscriptionTier === "pro" ||
-    subscriptionTier === "power" ||
-    isLifetime;
+  const isTrialing = subscriptionStatus === "trialing";
+  const isSubscribed =
+    subscriptionTier === "pro" || subscriptionTier === "power";
+  const isPaid = isSubscribed || isLifetime;
+  const isFree = subscriptionTier === "free";
 
   // Sync when the server re-renders after router.refresh()
   useEffect(() => {
@@ -169,7 +174,7 @@ export function SettingsContent({
     <div className="space-y-6 max-w-2xl">
       <h1 className="text-2xl font-bold">Settings</h1>
 
-      <Tabs defaultValue="api-keys">
+      <Tabs defaultValue={defaultTab}>
         <TabsList>
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="api-keys">API Keys</TabsTrigger>
@@ -293,25 +298,45 @@ export function SettingsContent({
 
         {/* ── Subscription ── */}
         <TabsContent value="subscription" className="mt-4 space-y-4">
+          {showCheckoutSuccess && (
+            <div
+              className="rounded-lg border border-green-500/40 bg-green-500/10 px-4 py-3 text-sm text-foreground"
+              role="status"
+            >
+              Welcome to {tierLabel}! Your plan is now active.
+            </div>
+          )}
           <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-sm font-medium text-muted-foreground">
+              Current plan
+            </span>
             <Badge className="text-sm px-3 py-1">{tierLabel}</Badge>
             {isLifetime && (
               <Badge variant="secondary" className="text-sm px-3 py-1">
                 Lifetime member
               </Badge>
             )}
-            {isPaid && !isLifetime && (
-              <span className="text-xs text-muted-foreground capitalize">
-                Status: {subscriptionStatus}
-              </span>
-            )}
           </div>
-          {currentPeriodEnd && !isLifetime && (
-            <p className="text-sm text-muted-foreground">
-              Current period ends{" "}
+          {isTrialing && currentPeriodEnd && (
+            <p className="text-sm text-amber-600 dark:text-amber-500">
+              Trial ends{" "}
               {new Date(currentPeriodEnd).toLocaleDateString(undefined, {
                 dateStyle: "medium",
               })}
+            </p>
+          )}
+          {isSubscribed && !isTrialing && currentPeriodEnd && (
+            <p className="text-sm text-muted-foreground">
+              Renews{" "}
+              {new Date(currentPeriodEnd).toLocaleDateString(undefined, {
+                dateStyle: "medium",
+              })}
+            </p>
+          )}
+          {isFree && (
+            <p className="text-sm text-muted-foreground">
+              Upgrade to unlock more compare models, unlimited projects, and
+              synthesis.
             </p>
           )}
           <p className="text-sm text-muted-foreground">
@@ -327,12 +352,12 @@ export function SettingsContent({
             .
           </p>
           <div className="flex gap-2 flex-wrap">
-            {!isPaid && (
+            {(isFree || isSubscribed) && (
               <Button variant="default" asChild>
-                <Link href="/pricing">Upgrade</Link>
+                <Link href="/pricing">Upgrade plan</Link>
               </Button>
             )}
-            {isPaid && !isLifetime && (
+            {isSubscribed && (
               <Button
                 type="button"
                 variant="outline"
@@ -340,16 +365,6 @@ export function SettingsContent({
                 onClick={() => void openPortal()}
               >
                 {portalLoading ? "Opening…" : "Manage subscription"}
-              </Button>
-            )}
-            {isPaid && (
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={portalLoading}
-                onClick={() => void openPortal()}
-              >
-                Billing history
               </Button>
             )}
           </div>

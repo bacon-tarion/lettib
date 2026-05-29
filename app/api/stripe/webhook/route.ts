@@ -1,26 +1,16 @@
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { getStripe } from "@/lib/stripe";
+import { getStripe, priceIdToTier } from "@/lib/stripe";
 import { createServiceClient } from "@/lib/supabase/service";
 
 export const runtime = "nodejs";
 
-function tierFromMetadata(plan: string | null | undefined): string | null {
-  if (plan === "pro" || plan === "power" || plan === "lifetime_byok") {
-    return plan;
-  }
-  return null;
-}
-
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   const userId =
     session.metadata?.supabase_user_id ?? session.client_reference_id;
-  const tier = tierFromMetadata(session.metadata?.plan);
-
-  if (!userId || !tier) {
+  if (!userId) {
     console.error(
-      "[stripe webhook] checkout.session.completed missing user or plan",
-      { userId: !!userId, tier }
+      "[stripe webhook] checkout.session.completed missing user id"
     );
     return;
   }
@@ -29,29 +19,50 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     typeof session.customer === "string"
       ? session.customer
       : session.customer?.id ?? null;
-  const subscriptionId =
-    typeof session.subscription === "string"
-      ? session.subscription
-      : session.subscription?.id ?? null;
 
   const sb = createServiceClient();
-  const { error } = await sb
-    .from("profiles")
-    .update({
-      tier: tier,
-      stripe_customer_id: customerId,
-      stripe_subscription_id: subscriptionId,
-      subscription_status: tier === "lifetime_byok" ? "active" : "active",
-      current_period_end:
-        tier === "lifetime_byok"
-          ? null
-          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    })
-    .eq("id", userId);
 
-  if (error) {
-    console.error("[stripe webhook] profiles update failed", error);
-    throw error;
+  if (session.mode === "payment") {
+    const { error } = await sb
+      .from("profiles")
+      .update({
+        tier: "lifetime_byok",
+        stripe_customer_id: customerId,
+        stripe_subscription_id: null,
+        subscription_status: "active",
+        current_period_end: null,
+      })
+      .eq("id", userId);
+
+    if (error) {
+      console.error("[stripe webhook] lifetime checkout update failed", error);
+      throw error;
+    }
+    return;
+  }
+
+  if (session.mode === "subscription") {
+    const subscriptionId =
+      typeof session.subscription === "string"
+        ? session.subscription
+        : session.subscription?.id ?? null;
+
+    const { error } = await sb
+      .from("profiles")
+      .update({
+        stripe_customer_id: customerId,
+        stripe_subscription_id: subscriptionId,
+        subscription_status: "active",
+      })
+      .eq("id", userId);
+
+    if (error) {
+      console.error(
+        "[stripe webhook] subscription checkout update failed",
+        error
+      );
+      throw error;
+    }
   }
 }
 
@@ -72,31 +83,32 @@ async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
     return;
   }
 
-  const status = sub.status;
-  const periodEnd = (sub as Stripe.Subscription & { current_period_end?: number })
-    .current_period_end
-    ? new Date(
-        (sub as Stripe.Subscription & { current_period_end: number })
-          .current_period_end * 1000
-      ).toISOString()
+  const priceId = sub.items.data[0]?.price?.id;
+  const mappedTier = priceId ? priceIdToTier(priceId) : null;
+
+  const periodEndUnix = (sub as Stripe.Subscription & { current_period_end?: number })
+    .current_period_end;
+  const periodEnd = periodEndUnix
+    ? new Date(periodEndUnix * 1000).toISOString()
     : null;
 
   let tier = (profile as { tier: string }).tier;
-  if (status === "active" || status === "trialing") {
-    const item = sub.items.data[0];
-    const lookup = item?.price?.lookup_key;
-    if (lookup === "pro_monthly") tier = "pro";
-    else if (lookup === "power_monthly") tier = "power";
-  } else if (status === "canceled" || status === "unpaid") {
-    tier = "free";
+  if (mappedTier) {
+    tier = mappedTier;
+  }
+
+  let subscriptionStatus = sub.status;
+  if (sub.status === "trialing") {
+    subscriptionStatus = "trialing";
+    if (mappedTier) tier = mappedTier;
   }
 
   const { error } = await sb
     .from("profiles")
     .update({
-      tier: tier,
+      tier,
       stripe_subscription_id: sub.id,
-      subscription_status: status,
+      subscription_status: subscriptionStatus,
       current_period_end: periodEnd,
     })
     .eq("id", (profile as { id: string }).id);
@@ -185,5 +197,5 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({ received: true });
+  return NextResponse.json({ received: true }, { status: 200 });
 }

@@ -42,7 +42,7 @@ export async function GET() {
     const stripe = getStripe();
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${getAppBaseUrl()}/settings`,
+      return_url: `${getAppBaseUrl()}/settings/subscription`,
     });
     return NextResponse.json({ url: session.url });
   } catch (err) {

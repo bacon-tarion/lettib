@@ -26,23 +26,32 @@ export default async function PricingPage() {
     currentTier = (data as { tier: string } | null)?.tier;
   }
 
+  const checkoutPrices = {
+    proMonthly: process.env.STRIPE_PRICE_PRO_MONTHLY?.trim() ?? "",
+    powerMonthly: process.env.STRIPE_PRICE_POWER_MONTHLY?.trim() ?? "",
+    lifetime: process.env.STRIPE_PRICE_LIFETIME?.trim() ?? "",
+  };
+
   return (
     <div className="bg-background text-foreground min-h-screen">
       <section className="border-b border-border">
         <div className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-4xl sm:text-5xl font-bold tracking-tight mb-4">
-            Simple, BYOK pricing.
+            Simple, transparent pricing
           </h1>
           <p className="text-lg text-muted-foreground">
-            You bring your provider keys. We bring the workspace. Choose a
-            monthly plan or lifetime access — zero markup on your AI usage.
+            Bring your own API keys. Pay only for the workspace.
           </p>
+          {/* TODO(post-launch): annual billing toggle — show $144/yr Pro and $336/yr Power */}
         </div>
       </section>
 
       <section>
         <div className="mx-auto max-w-6xl px-4 py-16">
-          <PricingGrid currentTier={currentTier} />
+          <PricingGrid
+            currentTier={currentTier}
+            checkoutPrices={checkoutPrices}
+          />
           <p className="mt-8 text-center text-xs text-muted-foreground">
             All plans require your own provider API keys (OpenAI, Anthropic,
             Google, xAI (Grok)). You&apos;re billed by the providers for their

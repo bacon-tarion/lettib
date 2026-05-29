@@ -55,6 +55,18 @@ export type PricingPlan = {
   paidCheckoutPlan?: PaidCheckoutPlan;
 };
 
+/** Ordering for upgrade / downgrade UI on the pricing page. */
+export const TIER_RANK: Record<string, number> = {
+  free: 0,
+  pro: 1,
+  power: 2,
+  lifetime_byok: 3,
+};
+
+export function tierRank(tier: string | null | undefined): number {
+  return TIER_RANK[tier ?? "free"] ?? 0;
+}
+
 export const PRICING_PLANS: PricingPlan[] = [
   {
     name: "Free",

@@ -98,6 +98,11 @@ const FAQ = [
 ];
 
 export default function LandingPage() {
+  const checkoutPrices = {
+    proMonthly: process.env.STRIPE_PRICE_PRO_MONTHLY?.trim() ?? "",
+    powerMonthly: process.env.STRIPE_PRICE_POWER_MONTHLY?.trim() ?? "",
+    lifetime: process.env.STRIPE_PRICE_LIFETIME?.trim() ?? "",
+  };
   return (
     <div className="bg-background text-foreground">
       {/* Hero */}
@@ -246,7 +251,7 @@ export default function LandingPage() {
               Free forever with BYOK. Upgrade when you need more models and projects.
             </p>
           </div>
-          <PricingGrid />
+          <PricingGrid checkoutPrices={checkoutPrices} />
           <p className="text-center text-xs text-muted-foreground">
             All paid plans are BYOK — you pay AI providers directly. LettiB charges
             only for the workspace (${PRICING_USD.proMonthly}/mo Pro, $
