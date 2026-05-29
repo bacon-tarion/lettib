@@ -3,7 +3,8 @@
 import { Suspense, useState, useEffect, useCallback, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ShieldCheck, BellRing, Loader2, CheckCircle2 } from "lucide-react";
+import { ShieldCheck, BellRing, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -115,6 +116,7 @@ function SettingsContentInner({
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [thresholdSaving, startThresholdSave] = useTransition();
   const [activeTab, setActiveTab] = useState(defaultTab);
+  const [syncBillingLoading, setSyncBillingLoading] = useState(false);
 
   useEffect(() => {
     const tab = searchParams.get("tab");
@@ -146,6 +148,26 @@ function SettingsContentInner({
   }, [initialUsageAlertThresholdCents]);
 
   const refresh = useCallback(() => router.refresh(), [router]);
+
+  async function handleSyncBilling() {
+    setSyncBillingLoading(true);
+    try {
+      const res = await fetch("/api/stripe/sync-tier", { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        tier?: string;
+      };
+      if (!res.ok) {
+        throw new Error(data.error ?? "Could not sync billing.");
+      }
+      toast.success(`Billing synced — plan is now ${tierDisplayName(data.tier)}.`);
+      refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not sync billing.");
+    } finally {
+      setSyncBillingLoading(false);
+    }
+  }
 
   function handleSaveThreshold() {
     setThresholdError(null);
@@ -362,6 +384,30 @@ function SettingsContentInner({
               checkoutPrices={checkoutPrices}
             />
           )}
+          <div className="pt-2 border-t border-border">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={syncBillingLoading}
+              onClick={() => void handleSyncBilling()}
+            >
+              {syncBillingLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Syncing…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Sync billing
+                </>
+              )}
+            </Button>
+            <p className="text-xs text-muted-foreground mt-2">
+              If your plan looks wrong after checkout, sync from Stripe.
+            </p>
+          </div>
         </TabsContent>
 
         {/* ── Privacy ── */}

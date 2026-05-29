@@ -138,6 +138,98 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 
+  async function createPortalUrl(): Promise<string> {
+    const portalSession = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: `${baseUrl}/settings?tab=subscription`,
+    });
+    if (!portalSession.url) {
+      throw new Error("Stripe did not return a portal URL.");
+    }
+    return portalSession.url;
+  }
+
+  function priceIdFromSubscription(
+    sub: import("stripe").Stripe.Subscription
+  ): string | null {
+    const priceRef = sub.items.data[0]?.price;
+    return typeof priceRef === "string" ? priceRef : priceRef?.id ?? null;
+  }
+
+  try {
+    const [activeSubs, trialingSubs] = await Promise.all([
+      stripe.subscriptions.list({
+        customer: customerId,
+        status: "active",
+        limit: 10,
+      }),
+      stripe.subscriptions.list({
+        customer: customerId,
+        status: "trialing",
+        limit: 10,
+      }),
+    ]);
+    const existingSubs = [...activeSubs.data, ...trialingSubs.data];
+
+    if (isLifetime && existingSubs.length > 0) {
+      for (const sub of existingSubs) {
+        console.log(`${LOG} canceling subscription before lifetime checkout`, {
+          subscriptionId: sub.id,
+          userId: user.id,
+        });
+        await stripe.subscriptions.cancel(sub.id);
+      }
+    } else if (!isLifetime && existingSubs.length > 0) {
+      for (const sub of existingSubs) {
+        const existingPriceId = priceIdFromSubscription(sub);
+        const existingTier = existingPriceId
+          ? tierForPriceId(existingPriceId, prices)
+          : null;
+
+        console.log(`${LOG} active subscription found`, {
+          subscriptionId: sub.id,
+          existingTier,
+          requestedTier: tier,
+        });
+
+        if (existingTier === tier) {
+          console.log(`${LOG} blocking duplicate subscription (same tier)`, {
+            tier,
+            userId: user.id,
+          });
+          const portal_url = await createPortalUrl();
+          return NextResponse.json({ error: "already subscribed", portal_url });
+        }
+
+        if (existingTier && tierRank(tier) > tierRank(existingTier)) {
+          console.log(`${LOG} canceling subscription for upgrade`, {
+            subscriptionId: sub.id,
+            from: existingTier,
+            to: tier,
+          });
+          await stripe.subscriptions.cancel(sub.id);
+        } else if (existingTier && tierRank(tier) < tierRank(existingTier)) {
+          console.log(`${LOG} blocking downgrade via checkout`, {
+            from: existingTier,
+            to: tier,
+          });
+          const portal_url = await createPortalUrl();
+          return NextResponse.json({
+            error: "Use billing portal to change your plan.",
+            portal_url,
+          });
+        }
+      }
+    }
+  } catch (e) {
+    logStepError("duplicate_subscription_check", e);
+    const message =
+      e instanceof Error
+        ? e.message
+        : "Failed to verify existing subscriptions.";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+
   let skipTrial = intent === "upgrade";
   try {
     const sc = createServiceClient();

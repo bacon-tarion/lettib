@@ -6,6 +6,7 @@ export type CheckoutApiResult = {
   error?: string;
   url?: string;
   portal?: boolean;
+  portal_url?: string;
 };
 
 function assertCheckoutUrl(url: string): void {
@@ -48,6 +49,10 @@ export async function startStripeCheckout(
   const data = (await res.json().catch(() => ({}))) as CheckoutApiResult;
 
   if (!res.ok) {
+    if (data.error === "already subscribed" && data.portal_url) {
+      window.location.href = data.portal_url;
+      return data;
+    }
     throw new Error(data.error ?? "Could not start checkout.");
   }
 

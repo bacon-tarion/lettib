@@ -1,5 +1,9 @@
 import Stripe from "stripe";
 import { createServiceClient } from "@/lib/supabase/service";
+import {
+  getServerStripeCheckoutPrices,
+  tierForPriceId,
+} from "@/lib/stripe/checkout-config";
 
 /**
  * Server-only Stripe client. Requires STRIPE_SECRET_KEY.
@@ -21,29 +25,10 @@ export const stripe = new Proxy({} as Stripe, {
   },
 });
 
-/** Map Stripe Price id → profiles.tier (pro, power, lifetime_byok). */
+/** Map Stripe Price id → profiles.tier (pro, power, lifetime_byok). Uses env + canonical fallbacks. */
 export function priceIdToTier(priceId: string): string | null {
   if (!priceId) return null;
-  const lifetime = process.env.STRIPE_PRICE_LIFETIME?.trim();
-  const proMonthly = process.env.STRIPE_PRICE_PRO_MONTHLY?.trim();
-  const proAnnual = process.env.STRIPE_PRICE_PRO_ANNUAL?.trim();
-  const powerMonthly = process.env.STRIPE_PRICE_POWER_MONTHLY?.trim();
-  const powerAnnual = process.env.STRIPE_PRICE_POWER_ANNUAL?.trim();
-
-  if (lifetime && priceId === lifetime) return "lifetime_byok";
-  if (
-    (proMonthly && priceId === proMonthly) ||
-    (proAnnual && priceId === proAnnual)
-  ) {
-    return "pro";
-  }
-  if (
-    (powerMonthly && priceId === powerMonthly) ||
-    (powerAnnual && priceId === powerAnnual)
-  ) {
-    return "power";
-  }
-  return null;
+  return tierForPriceId(priceId, getServerStripeCheckoutPrices());
 }
 
 export function getConfiguredPriceId(
@@ -84,6 +69,28 @@ export async function getOrCreateStripeCustomer(
   if (existing) return existing;
 
   const stripeClient = getStripe();
+
+  if (email) {
+    const byEmail = await stripeClient.customers.list({ email, limit: 1 });
+    const matched = byEmail.data[0];
+    if (matched) {
+      console.log("[stripe] reusing existing Stripe customer by email", {
+        userId,
+        customerId: matched.id,
+      });
+      const { error: linkErr } = await sb
+        .from("profiles")
+        .update({ stripe_customer_id: matched.id })
+        .eq("id", userId);
+      if (linkErr) {
+        throw new Error(
+          `Failed to link existing Stripe customer: ${linkErr.message}`
+        );
+      }
+      return matched.id;
+    }
+  }
+
   const customer = await stripeClient.customers.create({
     email: email || undefined,
     metadata: { supabase_user_id: userId },
