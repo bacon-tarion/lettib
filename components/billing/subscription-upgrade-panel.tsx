@@ -7,6 +7,7 @@ import { BillingIntervalToggle } from "@/components/billing/billing-interval-tog
 import {
   getDowngradeOptions,
   getUpgradeOptions,
+  resolvePowerPriceId,
   type BillingInterval,
   type StripeCheckoutPrices,
 } from "@/lib/stripe/checkout-config";
@@ -27,9 +28,31 @@ export function SubscriptionUpgradePanel({
   const [portalLoading, setPortalLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const upgrades = getUpgradeOptions(currentTier, interval, checkoutPrices);
-  const downgrades = getDowngradeOptions(currentTier);
-  const isLifetime = currentTier === "lifetime_byok";
+  const normalizedTier = currentTier.trim().toLowerCase();
+  const upgrades = getUpgradeOptions(normalizedTier, interval, checkoutPrices);
+  const downgrades = getDowngradeOptions(normalizedTier);
+  const isLifetime = normalizedTier === "lifetime_byok";
+  const isPro = normalizedTier === "pro";
+
+  async function handleProToPowerUpgrade(billingInterval: BillingInterval) {
+    const { priceId, planType } = resolvePowerPriceId(
+      billingInterval,
+      checkoutPrices
+    );
+    setError(null);
+    setLoadingId(`power-${billingInterval}`);
+    try {
+      await startStripeCheckout(priceId, planType, {
+        loginNext: "/settings?tab=subscription",
+        intent: "upgrade",
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Checkout failed.");
+      console.error("[settings] Pro→Power checkout failed:", e);
+    } finally {
+      setLoadingId(null);
+    }
+  }
 
   async function handleUpgrade(priceId: string, planType: "monthly" | "annual" | "lifetime") {
     setError(null);
@@ -37,6 +60,7 @@ export function SubscriptionUpgradePanel({
     try {
       await startStripeCheckout(priceId, planType, {
         loginNext: "/settings?tab=subscription",
+        intent: "upgrade",
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Checkout failed.");
@@ -67,9 +91,51 @@ export function SubscriptionUpgradePanel({
 
   return (
     <div className="space-y-4">
-      {upgrades.length > 0 && (
+      {(!isLifetime && (upgrades.length > 0 || isPro)) && (
         <div className="space-y-3">
           <BillingIntervalToggle value={interval} onChange={setInterval} />
+
+          {isPro && (
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <Button
+                type="button"
+                variant="default"
+                disabled={loadingId !== null || portalLoading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleProToPowerUpgrade("monthly");
+                }}
+              >
+                {loadingId === "power-monthly" ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Redirecting…
+                  </>
+                ) : (
+                  "Upgrade to Power (Monthly)"
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="default"
+                disabled={loadingId !== null || portalLoading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleProToPowerUpgrade("annual");
+                }}
+              >
+                {loadingId === "power-annual" ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Redirecting…
+                  </>
+                ) : (
+                  "Upgrade to Power (Annual)"
+                )}
+              </Button>
+            </div>
+          )}
+
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             {upgrades.map((opt) => (
               <Button
@@ -79,9 +145,10 @@ export function SubscriptionUpgradePanel({
                   opt.targetTier === "lifetime_byok" ? "default" : "outline"
                 }
                 disabled={loadingId !== null || portalLoading || !opt.priceId}
-                onClick={() =>
-                  void handleUpgrade(opt.priceId, opt.planType)
-                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleUpgrade(opt.priceId, opt.planType);
+                }}
               >
                 {loadingId === opt.priceId ? (
                   <>
@@ -109,7 +176,10 @@ export function SubscriptionUpgradePanel({
                 variant="ghost"
                 className="text-muted-foreground"
                 disabled={portalLoading || loadingId !== null}
-                onClick={() => void handlePortal()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handlePortal();
+                }}
               >
                 {portalLoading ? "Opening…" : d.label}
               </Button>
@@ -121,12 +191,15 @@ export function SubscriptionUpgradePanel({
         </div>
       )}
 
-      {(currentTier === "pro" || currentTier === "power") && (
+      {(normalizedTier === "pro" || normalizedTier === "power") && (
         <Button
           type="button"
           variant="outline"
           disabled={portalLoading || loadingId !== null}
-          onClick={() => void handlePortal()}
+          onClick={(e) => {
+            e.stopPropagation();
+            void handlePortal();
+          }}
         >
           {portalLoading ? "Opening…" : "Manage billing"}
         </Button>

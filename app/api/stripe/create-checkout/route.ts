@@ -6,8 +6,9 @@ import { tierRank } from "@/lib/pricing";
 import {
   getServerStripeCheckoutPrices,
   planTypeForPriceId,
+  tierForPriceId,
 } from "@/lib/stripe/checkout-config";
-import { getOrCreateStripeCustomer, getStripe, priceIdToTier } from "@/lib/stripe";
+import { getOrCreateStripeCustomer, getStripe } from "@/lib/stripe";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ const LOG = "[stripe/create-checkout]";
 const bodySchema = z.object({
   priceId: z.string().min(1),
   planType: z.enum(["monthly", "annual", "lifetime"]),
+  intent: z.enum(["upgrade", "new"]).optional().default("new"),
 });
 
 function logStepError(step: string, e: unknown) {
@@ -50,7 +52,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { priceId, planType: planTypeBody } = parsed.data;
+  const { priceId, planType: planTypeBody, intent } = parsed.data;
   const prices = getServerStripeCheckoutPrices();
   const planType = planTypeForPriceId(priceId, prices);
   if (planTypeBody !== planType) {
@@ -61,9 +63,9 @@ export async function POST(request: Request) {
   }
 
   try {
-    const tier = priceIdToTier(priceId);
+    const tier = tierForPriceId(priceId, prices);
     if (!tier) {
-      console.error(`${LOG} step failed: priceIdToTier`, { priceId });
+      console.error(`${LOG} step failed: tierForPriceId`, { priceId });
       return NextResponse.json({ error: "Unknown price id." }, { status: 400 });
     }
     if (planType === "lifetime" && tier !== "lifetime_byok") {
@@ -123,7 +125,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 
-  const tier = priceIdToTier(priceId)!;
+  const tier = tierForPriceId(priceId, prices)!;
   const isLifetime = planType === "lifetime";
 
   let customerId: string;
@@ -136,7 +138,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 
-  let skipTrial = false;
+  let skipTrial = intent === "upgrade";
   try {
     const sc = createServiceClient();
     const { data: profile } = await sc
@@ -150,6 +152,7 @@ export async function POST(request: Request) {
     } | null;
     const currentTier = row?.tier ?? "free";
     skipTrial =
+      intent === "upgrade" ||
       !!row?.stripe_subscription_id ||
       tierRank(tier) > tierRank(currentTier) ||
       tierRank(currentTier) > tierRank("free");

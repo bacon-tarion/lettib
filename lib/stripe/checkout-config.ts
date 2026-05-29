@@ -10,6 +10,43 @@ export type StripeCheckoutPrices = {
   lifetime: string;
 };
 
+/** Canonical Stripe price ids (used when env vars are unset). */
+export const CANONICAL_STRIPE_PRICE_IDS = {
+  proMonthly: "price_1TZQ1E421EGfXaTPadqVJdxD",
+  proAnnual: "price_1TcSjX421EGfXaTPkFqKiJiw",
+  powerMonthly: "price_1TZQ2H421EGfXaTPYLch9oiY",
+  powerAnnual: "price_1TcSlC421EGfXaTPjrvOAofN",
+  lifetime: "price_1TZQ4V421EGfXaTPEVSWsRpk",
+} as const;
+
+export function tierForPriceId(
+  priceId: string,
+  prices: StripeCheckoutPrices
+): UpgradeTargetTier | null {
+  if (priceId === prices.lifetime) return "lifetime_byok";
+  if (priceId === prices.proMonthly || priceId === prices.proAnnual) return "pro";
+  if (priceId === prices.powerMonthly || priceId === prices.powerAnnual) {
+    return "power";
+  }
+  return null;
+}
+
+export function resolvePowerPriceId(
+  interval: BillingInterval,
+  prices: StripeCheckoutPrices
+): { priceId: string; planType: "monthly" | "annual" } {
+  if (interval === "annual") {
+    return {
+      priceId: prices.powerAnnual || CANONICAL_STRIPE_PRICE_IDS.powerAnnual,
+      planType: "annual",
+    };
+  }
+  return {
+    priceId: prices.powerMonthly || CANONICAL_STRIPE_PRICE_IDS.powerMonthly,
+    planType: "monthly",
+  };
+}
+
 /** Annual totals and savings vs paying monthly for 12 months. */
 export const ANNUAL_BILLING = {
   pro: { yearly: 144, monthlyEquivalent: 180, savings: 36, percent: 20 },
@@ -101,7 +138,8 @@ export function getUpgradeOptions(
       planType: interval === "annual" ? "annual" : "monthly",
     });
   }
-  if (current < tierRank("power")) {
+  // Pro → Power uses dedicated buttons in SubscriptionUpgradePanel.
+  if (current < tierRank("power") && currentTier !== "pro") {
     options.push({
       targetTier: "power",
       label: `Upgrade to Power (${intervalLabel})`,
