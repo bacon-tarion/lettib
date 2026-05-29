@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
+import { tierRank } from "@/lib/pricing";
+import {
+  getServerStripeCheckoutPrices,
+  planTypeForPriceId,
+} from "@/lib/stripe/checkout-config";
 import { getOrCreateStripeCustomer, getStripe, priceIdToTier } from "@/lib/stripe";
 
 export const runtime = "nodejs";
@@ -44,8 +50,15 @@ export async function POST(request: Request) {
     );
   }
 
-  const { priceId, planType } = parsed.data;
-  console.error(`${LOG} request`, { priceId, planType });
+  const { priceId, planType: planTypeBody } = parsed.data;
+  const prices = getServerStripeCheckoutPrices();
+  const planType = planTypeForPriceId(priceId, prices);
+  if (planTypeBody !== planType) {
+    return NextResponse.json(
+      { error: "planType does not match priceId." },
+      { status: 400 }
+    );
+  }
 
   try {
     const tier = priceIdToTier(priceId);
@@ -86,7 +99,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     user = data.user;
-    console.error(`${LOG} auth ok`, { userId: user.id });
   } catch (e) {
     logStepError("auth_check", e);
     const message = e instanceof Error ? e.message : "Authentication failed.";
@@ -105,18 +117,18 @@ export async function POST(request: Request) {
   let stripe: ReturnType<typeof getStripe>;
   try {
     stripe = getStripe();
-    console.error(`${LOG} stripe client ok`);
   } catch (e) {
     logStepError("get_stripe_client", e);
     const message = e instanceof Error ? e.message : "Stripe is not configured.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+
   const tier = priceIdToTier(priceId)!;
+  const isLifetime = planType === "lifetime";
 
   let customerId: string;
   try {
     customerId = await getOrCreateStripeCustomer(user.id, user.email ?? "");
-    console.error(`${LOG} customer ok`, { customerId });
   } catch (e) {
     logStepError("customer_lookup_or_create", e);
     const message =
@@ -124,35 +136,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 
-  const isLifetime = planType === "lifetime";
-
-  if (!isLifetime) {
-    try {
-      const [trialing, active] = await Promise.all([
-        stripe.subscriptions.list({
-          customer: customerId,
-          status: "trialing",
-          limit: 1,
-        }),
-        stripe.subscriptions.list({
-          customer: customerId,
-          status: "active",
-          limit: 1,
-        }),
-      ]);
-      console.error(`${LOG} subscription list ok`, {
-        trialing: trialing.data.length,
-        active: active.data.length,
-      });
-      if (trialing.data.length > 0 || active.data.length > 0) {
-        return NextResponse.json({ portal: true });
-      }
-    } catch (e) {
-      logStepError("subscription_list", e);
-      const message =
-        e instanceof Error ? e.message : "Failed to check existing subscriptions.";
-      return NextResponse.json({ error: message }, { status: 500 });
-    }
+  let skipTrial = false;
+  try {
+    const sc = createServiceClient();
+    const { data: profile } = await sc
+      .from("profiles")
+      .select("tier, stripe_subscription_id")
+      .eq("id", user.id)
+      .maybeSingle();
+    const row = profile as {
+      tier?: string;
+      stripe_subscription_id?: string | null;
+    } | null;
+    const currentTier = row?.tier ?? "free";
+    skipTrial =
+      !!row?.stripe_subscription_id ||
+      tierRank(tier) > tierRank(currentTier) ||
+      tierRank(currentTier) > tierRank("free");
+  } catch (e) {
+    logStepError("profile_tier_lookup", e);
   }
 
   try {
@@ -168,31 +170,35 @@ export async function POST(request: Request) {
       },
       ...(isLifetime
         ? {}
-        : {
-            subscription_data: {
-              trial_period_days: 7,
-              metadata: {
-                supabase_user_id: user.id,
-                tier,
+        : skipTrial
+          ? {
+              subscription_data: {
+                metadata: {
+                  supabase_user_id: user.id,
+                  tier,
+                },
               },
-            },
-          }),
-      success_url: `${baseUrl}/settings/subscription?success=1`,
+            }
+          : {
+              subscription_data: {
+                trial_period_days: 7,
+                metadata: {
+                  supabase_user_id: user.id,
+                  tier,
+                },
+              },
+            }),
+      success_url: `${baseUrl}/settings?tab=subscription&success=1`,
       cancel_url: `${baseUrl}/pricing`,
     });
 
     if (!session.url) {
-      console.error(`${LOG} step failed: checkout_session_create`, {
-        reason: "no_session_url",
-        sessionId: session.id,
-      });
       return NextResponse.json(
         { error: "Stripe did not return a checkout URL." },
         { status: 502 }
       );
     }
 
-    console.error(`${LOG} checkout session ok`, { sessionId: session.id });
     return NextResponse.json({ url: session.url });
   } catch (e) {
     logStepError("checkout_session_create", e);

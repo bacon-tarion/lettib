@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getUserSubscription } from "@/lib/subscription/tier";
 import { listApiKeys, getUsageAlertThresholdCents } from "../actions";
+import { getServerStripeCheckoutPrices } from "@/lib/stripe/checkout-config";
 import { SettingsContent } from "../settings-content";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +41,7 @@ export default async function SubscriptionSettingsPage({
       currentPeriodEnd={subscription.current_period_end}
       defaultTab="subscription"
       showCheckoutSuccess={searchParams.success === "1"}
+      checkoutPrices={getServerStripeCheckoutPrices()}
     />
   );
 }

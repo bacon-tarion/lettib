@@ -6,14 +6,20 @@ import { Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { PRICING_PLANS, tierRank } from "@/lib/pricing";
+import { BillingIntervalToggle } from "@/components/billing/billing-interval-toggle";
+import { PRICING_PLANS, PRICING_USD, tierRank } from "@/lib/pricing";
+import {
+  ANNUAL_BILLING,
+  planTypeForPriceId,
+  priceIdForTarget,
+  type BillingInterval,
+  type StripeCheckoutPrices,
+} from "@/lib/stripe/checkout-config";
+import {
+  openStripeBillingPortal,
+  startStripeCheckout,
+} from "@/lib/stripe/checkout-client";
 import { cn } from "@/lib/utils";
-
-export type PricingCheckoutPrices = {
-  proMonthly: string;
-  powerMonthly: string;
-  lifetime: string;
-};
 
 type PlanKey = "free" | "pro" | "power" | "lifetime_byok";
 
@@ -24,69 +30,37 @@ const PLAN_TIER: Record<string, PlanKey> = {
   "Lifetime BYOK": "lifetime_byok",
 };
 
-async function startCheckout(priceId: string, planType: "monthly" | "lifetime") {
-  const res = await fetch("/api/stripe/create-checkout", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ priceId, planType }),
-  });
-
-  if (res.status === 401) {
-    window.location.href = `/login?next=${encodeURIComponent("/pricing")}`;
-    return;
-  }
-
-  const data = (await res.json().catch(() => ({}))) as {
-    error?: string;
-    url?: string;
-    portal?: boolean;
-  };
-
-  if (!res.ok) {
-    throw new Error(data.error ?? "Could not start checkout.");
-  }
-
-  if (data.portal) {
-    const portalRes = await fetch("/api/stripe/portal");
-    const portalData = (await portalRes.json().catch(() => ({}))) as {
-      error?: string;
-      url?: string;
-    };
-    if (!portalRes.ok) {
-      throw new Error(portalData.error ?? "Could not open billing portal.");
-    }
-    if (portalData.url) {
-      window.location.href = portalData.url;
-    }
-    return;
-  }
-
-  if (data.url) {
-    window.location.href = data.url;
-  }
-}
-
-function ctaLabel(
+function displayForPlan(
   planTier: PlanKey,
-  currentTier: string | undefined,
-  defaultCta: string
-): { label: string; disabled: boolean; variant: "current" | "downgrade" | "upgrade" | "default" } {
-  if (!currentTier) {
-    return { label: defaultCta, disabled: false, variant: "default" };
+  interval: BillingInterval
+): { price: string; cadence: string; savings?: string } {
+  if (planTier === "free") {
+    return { price: `$${PRICING_USD.free}`, cadence: "/forever" };
   }
-  const current = tierRank(currentTier);
-  const target = tierRank(planTier);
-  if (current === target) {
-    return { label: "Current plan", disabled: true, variant: "current" };
+  if (planTier === "lifetime_byok") {
+    return {
+      price: `$${PRICING_USD.lifetimeByok}`,
+      cadence: "one-time",
+    };
   }
-  if (current > target) {
-    return { label: "Downgrade", disabled: true, variant: "downgrade" };
+  if (planTier === "pro") {
+    if (interval === "annual") {
+      return {
+        price: `$${ANNUAL_BILLING.pro.yearly}`,
+        cadence: "/year",
+        savings: `Save $${ANNUAL_BILLING.pro.savings} (~${ANNUAL_BILLING.pro.percent}%) vs monthly`,
+      };
+    }
+    return { price: `$${PRICING_USD.proMonthly}`, cadence: "/month" };
   }
-  return {
-    label: planTier === "free" ? defaultCta : "Upgrade",
-    disabled: false,
-    variant: "upgrade",
-  };
+  if (interval === "annual") {
+    return {
+      price: `$${ANNUAL_BILLING.power.yearly}`,
+      cadence: "/year",
+      savings: `Save $${ANNUAL_BILLING.power.savings} (~${ANNUAL_BILLING.power.percent}%) vs monthly`,
+    };
+  }
+  return { price: `$${PRICING_USD.powerMonthly}`, cadence: "/month" };
 }
 
 export function PricingGrid({
@@ -94,57 +68,105 @@ export function PricingGrid({
   checkoutPrices,
 }: {
   currentTier?: string;
-  checkoutPrices: PricingCheckoutPrices;
+  checkoutPrices: StripeCheckoutPrices;
 }) {
+  const [interval, setInterval] = useState<BillingInterval>("monthly");
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  async function handlePaidCta(
+    planTier: PlanKey,
+    action: "checkout" | "portal" | "signup"
+  ) {
+    if (action === "signup") return;
+    setError(null);
+    setLoadingKey(planTier);
+    try {
+      if (action === "portal") {
+        await openStripeBillingPortal();
+        return;
+      }
+      const target =
+        planTier === "pro"
+          ? "pro"
+          : planTier === "power"
+            ? "power"
+            : "lifetime_byok";
+      const priceId =
+        planTier === "lifetime_byok"
+          ? checkoutPrices.lifetime
+          : priceIdForTarget(target, interval, checkoutPrices);
+      const planType = planTypeForPriceId(priceId, checkoutPrices);
+      await startStripeCheckout(priceId, planType, { loginNext: "/pricing" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Checkout failed.");
+    } finally {
+      setLoadingKey(null);
+    }
+  }
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <BillingIntervalToggle value={interval} onChange={setInterval} />
+
       {error && (
         <p className="text-center text-sm text-destructive" role="alert">
           {error}
         </p>
       )}
+
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         {PRICING_PLANS.map((p) => {
           const planTier = PLAN_TIER[p.name] ?? "free";
           const isLifetime = planTier === "lifetime_byok";
           const isCurrent =
             currentTier != null && tierRank(currentTier) === tierRank(planTier);
-          const { label, disabled, variant } = ctaLabel(
-            planTier,
-            currentTier,
-            p.cta
-          );
+          const current = tierRank(currentTier ?? "free");
+          const target = tierRank(planTier);
+          const isDowngrade = currentTier != null && current > target;
+          const isUpgrade = currentTier != null && current < target;
+          const display = displayForPlan(planTier, interval);
 
-          const freeCta = "Get started free";
-          const proCta = "Start 7-day free trial";
-          const powerCta = "Start 7-day free trial";
-          const lifetimeCta = "Get lifetime access — $79";
+          let buttonLabel = p.cta;
+          let action: "checkout" | "portal" | "signup" = "checkout";
+          let disabled = false;
 
-          const buttonLabel =
-            planTier === "free"
-              ? currentTier
-                ? label
-                : freeCta
-              : planTier === "pro"
-                ? currentTier
-                  ? label
-                  : proCta
-                : planTier === "power"
-                  ? currentTier
-                    ? label
-                    : powerCta
-                  : currentTier
-                    ? label
-                    : lifetimeCta;
+          if (planTier === "free") {
+            buttonLabel = currentTier ? "Downgrade via billing" : "Get started free";
+            action = currentTier ? "portal" : "signup";
+            disabled = !!currentTier && current === 0;
+            if (isCurrent) {
+              buttonLabel = "Current plan";
+              disabled = true;
+            }
+          } else if (isCurrent) {
+            buttonLabel = "Current plan";
+            disabled = true;
+          } else if (isDowngrade) {
+            buttonLabel = "Downgrade";
+            action = "portal";
+          } else if (isUpgrade || !currentTier) {
+            if (planTier === "pro") {
+              buttonLabel = currentTier ? "Upgrade to Pro" : "Start 7-day free trial";
+            } else if (planTier === "power") {
+              buttonLabel = currentTier ? "Upgrade to Power" : "Start 7-day free trial";
+            } else {
+              buttonLabel = currentTier
+                ? "Upgrade to Lifetime"
+                : "Get lifetime access — $79";
+            }
+            action = "checkout";
+          }
 
           const priceId =
             planTier === "pro"
-              ? checkoutPrices.proMonthly
+              ? interval === "annual"
+                ? checkoutPrices.proAnnual
+                : checkoutPrices.proMonthly
               : planTier === "power"
-                ? checkoutPrices.powerMonthly
+                ? interval === "annual"
+                  ? checkoutPrices.powerAnnual
+                  : checkoutPrices.powerMonthly
                 : planTier === "lifetime_byok"
                   ? checkoutPrices.lifetime
                   : null;
@@ -170,7 +192,14 @@ export function PricingGrid({
                   </Badge>
                 </div>
               )}
-              {p.highlight && !isLifetime && (
+              {isCurrent && (
+                <div className="absolute -top-3 right-3">
+                  <Badge variant="secondary" className="rounded-full">
+                    Current plan
+                  </Badge>
+                </div>
+              )}
+              {p.highlight && !isLifetime && !isCurrent && (
                 <div className="absolute -top-3 left-1/2 -translate-x-1/2">
                   <Badge variant="secondary" className="rounded-full">
                     Most popular
@@ -182,16 +211,21 @@ export function PricingGrid({
                   <h3 className="text-lg font-semibold text-foreground">{p.name}</h3>
                   <div className="flex items-baseline gap-1">
                     <span className="text-4xl font-bold tracking-tight text-foreground">
-                      {p.price}
+                      {display.price}
                     </span>
                     <span className="text-sm whitespace-nowrap text-muted-foreground">
-                      {p.cadence}
+                      {display.cadence}
                     </span>
                   </div>
+                  {display.savings && (
+                    <p className="text-xs font-medium text-green-600 dark:text-green-500">
+                      {display.savings}
+                    </p>
+                  )}
                   <p className="text-sm text-muted-foreground">{p.blurb}</p>
                 </div>
 
-                {planTier === "free" ? (
+                {action === "signup" ? (
                   <Button
                     asChild
                     className="w-full"
@@ -205,35 +239,19 @@ export function PricingGrid({
                     type="button"
                     className={cn(
                       "w-full",
-                      variant === "downgrade" && "opacity-60"
+                      isDowngrade && "opacity-80"
                     )}
                     variant={
                       isLifetime
                         ? "default"
-                        : p.highlight
+                        : p.highlight && !isDowngrade
                           ? "default"
                           : "outline"
                     }
                     disabled={
-                      disabled || loadingKey !== null || !priceId
+                      disabled || loadingKey !== null || (!priceId && action === "checkout")
                     }
-                    onClick={async () => {
-                      if (!priceId || disabled) return;
-                      setError(null);
-                      setLoadingKey(planTier);
-                      try {
-                        await startCheckout(
-                          priceId,
-                          planTier === "lifetime_byok" ? "lifetime" : "monthly"
-                        );
-                      } catch (e) {
-                        setError(
-                          e instanceof Error ? e.message : "Checkout failed."
-                        );
-                      } finally {
-                        setLoadingKey(null);
-                      }
-                    }}
+                    onClick={() => void handlePaidCta(planTier, action)}
                   >
                     {loadingKey === planTier ? (
                       <>

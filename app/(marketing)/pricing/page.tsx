@@ -3,6 +3,7 @@ import { PricingGrid } from "../_components/pricing-grid";
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
 import { PRICING_USD } from "@/lib/pricing";
+import { getServerStripeCheckoutPrices } from "@/lib/stripe/checkout-config";
 import { createClient } from "@/lib/supabase/server";
 
 export const metadata = {
@@ -41,11 +42,7 @@ async function getCurrentTierOptional(): Promise<string | undefined> {
 export default async function PricingPage() {
   const currentTier = await getCurrentTierOptional();
 
-  const checkoutPrices = {
-    proMonthly: process.env.STRIPE_PRICE_PRO_MONTHLY?.trim() ?? "",
-    powerMonthly: process.env.STRIPE_PRICE_POWER_MONTHLY?.trim() ?? "",
-    lifetime: process.env.STRIPE_PRICE_LIFETIME?.trim() ?? "",
-  };
+  const checkoutPrices = getServerStripeCheckoutPrices();
 
   return (
     <div className="bg-background text-foreground min-h-screen">
@@ -57,7 +54,6 @@ export default async function PricingPage() {
           <p className="text-lg text-muted-foreground">
             Bring your own API keys. Pay only for the workspace.
           </p>
-          {/* TODO(post-launch): annual billing toggle — show $144/yr Pro and $336/yr Power */}
         </div>
       </section>
 

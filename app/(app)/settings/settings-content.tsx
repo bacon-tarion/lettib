@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useTransition } from "react";
+import { Suspense, useState, useEffect, useCallback, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ShieldCheck, BellRing, Loader2, CheckCircle2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -12,8 +12,10 @@ import { Label } from "@/components/ui/label";
 import { ApiKeyTile } from "@/components/settings/api-key-tile";
 import type { ApiConnection } from "./actions";
 import { updateUsageAlertThresholdCents } from "./actions";
+import { SubscriptionUpgradePanel } from "@/components/billing/subscription-upgrade-panel";
 import { PRICING_USD } from "@/lib/pricing";
 import { tierDisplayName } from "@/lib/subscription/tier";
+import type { StripeCheckoutPrices } from "@/lib/stripe/checkout-config";
 
 // Per-provider config. `consoleUrl` points at each provider's API-key
 // dashboard; the tile renders a small "Get your API key →" link out to it
@@ -81,9 +83,10 @@ interface SettingsContentProps {
   currentPeriodEnd?: string | null;
   defaultTab?: string;
   showCheckoutSuccess?: boolean;
+  checkoutPrices: StripeCheckoutPrices;
 }
 
-export function SettingsContent({
+function SettingsContentInner({
   initialConnections,
   userEmail,
   userName,
@@ -93,8 +96,12 @@ export function SettingsContent({
   currentPeriodEnd = null,
   defaultTab = "api-keys",
   showCheckoutSuccess = false,
+  checkoutPrices,
 }: SettingsContentProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const checkoutSuccessBanner =
+    showCheckoutSuccess || searchParams.get("success") === "1";
   const [connections, setConnections] = useState(initialConnections);
   const [displayName, setDisplayName] = useState(userName);
 
@@ -107,21 +114,16 @@ export function SettingsContent({
   const [thresholdError, setThresholdError] = useState<string | null>(null);
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [thresholdSaving, startThresholdSave] = useTransition();
-  const [portalLoading, setPortalLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState(defaultTab);
 
-  async function openPortal() {
-    setPortalLoading(true);
-    try {
-      const res = await fetch("/api/stripe/portal");
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Portal failed");
-      if (data.url) window.location.href = data.url;
-    } catch (err) {
-      console.error("[settings] portal failed:", err);
-    } finally {
-      setPortalLoading(false);
-    }
-  }
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab) setActiveTab(tab);
+  }, [searchParams]);
+
+  useEffect(() => {
+    setActiveTab(defaultTab);
+  }, [defaultTab]);
 
   const tierLabel = tierDisplayName(subscriptionTier);
   const isLifetime = subscriptionTier === "lifetime_byok";
@@ -173,7 +175,7 @@ export function SettingsContent({
     <div className="space-y-6 max-w-2xl">
       <h1 className="text-2xl font-bold">Settings</h1>
 
-      <Tabs defaultValue={defaultTab}>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="api-keys">API Keys</TabsTrigger>
@@ -297,7 +299,7 @@ export function SettingsContent({
 
         {/* ── Subscription ── */}
         <TabsContent value="subscription" className="mt-4 space-y-4">
-          {showCheckoutSuccess && (
+          {checkoutSuccessBanner && (
             <div
               className="rounded-lg border border-green-500/40 bg-green-500/10 px-4 py-3 text-sm text-foreground"
               role="status"
@@ -350,23 +352,16 @@ export function SettingsContent({
             </Link>
             .
           </p>
-          <div className="flex gap-2 flex-wrap">
-            {(isFree || isSubscribed) && (
-              <Button variant="default" asChild>
-                <Link href="/pricing">Upgrade plan</Link>
-              </Button>
-            )}
-            {isSubscribed && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={portalLoading}
-                onClick={() => void openPortal()}
-              >
-                {portalLoading ? "Opening…" : "Manage subscription"}
-              </Button>
-            )}
-          </div>
+          {isFree ? (
+            <Button variant="default" asChild>
+              <Link href="/pricing">View all plans</Link>
+            </Button>
+          ) : (
+            <SubscriptionUpgradePanel
+              currentTier={subscriptionTier}
+              checkoutPrices={checkoutPrices}
+            />
+          )}
         </TabsContent>
 
         {/* ── Privacy ── */}
@@ -384,5 +379,13 @@ export function SettingsContent({
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+export function SettingsContent(props: SettingsContentProps) {
+  return (
+    <Suspense fallback={<div className="max-w-2xl text-sm text-muted-foreground">Loading settings…</div>}>
+      <SettingsContentInner {...props} />
+    </Suspense>
   );
 }

@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PricingGrid } from "./_components/pricing-grid";
 import { PRICING_USD, COMPARE_MODELS_BY_PLAN } from "@/lib/pricing";
+import { getServerStripeCheckoutPrices } from "@/lib/stripe/checkout-config";
 
 const PROBLEMS = [
   {
@@ -98,11 +99,7 @@ const FAQ = [
 ];
 
 export default function LandingPage() {
-  const checkoutPrices = {
-    proMonthly: process.env.STRIPE_PRICE_PRO_MONTHLY?.trim() ?? "",
-    powerMonthly: process.env.STRIPE_PRICE_POWER_MONTHLY?.trim() ?? "",
-    lifetime: process.env.STRIPE_PRICE_LIFETIME?.trim() ?? "",
-  };
+  const checkoutPrices = getServerStripeCheckoutPrices();
   return (
     <div className="bg-background text-foreground">
       {/* Hero */}
