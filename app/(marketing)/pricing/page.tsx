@@ -10,21 +10,36 @@ export const metadata = {
   description: `Simple BYOK pricing for the LettiB multi-AI workspace. Free ($${PRICING_USD.free} forever), Pro ($${PRICING_USD.proMonthly}/mo), Power ($${PRICING_USD.powerMonthly}/mo), and Lifetime BYOK ($${PRICING_USD.lifetimeByok} one-time).`,
 };
 
-export default async function PricingPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+/** Optional: current tier for logged-in users only; never throws. */
+async function getCurrentTierOptional(): Promise<string | undefined> {
+  try {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+    const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
+    if (!url || !key) return undefined;
 
-  let currentTier: string | undefined;
-  if (user) {
-    const { data } = await supabase
+    const supabase = await createClient();
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+    if (authError || !user) return undefined;
+
+    const { data, error: profileError } = await supabase
       .from("profiles")
       .select("tier")
       .eq("id", user.id)
       .maybeSingle();
-    currentTier = (data as { tier: string } | null)?.tier;
+    if (profileError) return undefined;
+
+    return (data as { tier: string } | null)?.tier;
+  } catch (e) {
+    console.error("[pricing] optional auth/tier lookup failed:", e);
+    return undefined;
   }
+}
+
+export default async function PricingPage() {
+  const currentTier = await getCurrentTierOptional();
 
   const checkoutPrices = {
     proMonthly: process.env.STRIPE_PRICE_PRO_MONTHLY?.trim() ?? "",
