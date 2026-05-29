@@ -6,12 +6,12 @@ import { createClient } from "@supabase/supabase-js";
 
 export function createServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_SECRET;
 
   if (!url || !serviceKey) {
     throw new Error(
       "Supabase service role credentials are not configured. " +
-        "Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
+        "Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_SECRET."
     );
   }
 

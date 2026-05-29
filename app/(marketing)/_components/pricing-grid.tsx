@@ -39,10 +39,26 @@ async function startCheckout(priceId: string, planType: "monthly" | "lifetime") 
   const data = (await res.json().catch(() => ({}))) as {
     error?: string;
     url?: string;
+    portal?: boolean;
   };
 
   if (!res.ok) {
     throw new Error(data.error ?? "Could not start checkout.");
+  }
+
+  if (data.portal) {
+    const portalRes = await fetch("/api/stripe/portal");
+    const portalData = (await portalRes.json().catch(() => ({}))) as {
+      error?: string;
+      url?: string;
+    };
+    if (!portalRes.ok) {
+      throw new Error(portalData.error ?? "Could not open billing portal.");
+    }
+    if (portalData.url) {
+      window.location.href = portalData.url;
+    }
+    return;
   }
 
   if (data.url) {

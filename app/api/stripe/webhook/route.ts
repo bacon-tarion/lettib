@@ -74,7 +74,7 @@ async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
   const sb = createServiceClient();
   const { data: profile } = await sb
     .from("profiles")
-    .select("id, tier")
+    .select("id")
     .eq("stripe_customer_id", customerId)
     .maybeSingle();
 
@@ -83,8 +83,21 @@ async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
     return;
   }
 
-  const priceId = sub.items.data[0]?.price?.id;
-  const mappedTier = priceId ? priceIdToTier(priceId) : null;
+  const priceRef = sub.items.data[0]?.price;
+  const priceId =
+    typeof priceRef === "string" ? priceRef : priceRef?.id ?? null;
+  if (!priceId) {
+    console.error(
+      "[stripe webhook] subscription.updated missing items.data[0].price id"
+    );
+    return;
+  }
+
+  const tier = priceIdToTier(priceId);
+  if (!tier) {
+    console.error("[stripe webhook] subscription.updated unknown price id", priceId);
+    return;
+  }
 
   const periodEndUnix = (sub as Stripe.Subscription & { current_period_end?: number })
     .current_period_end;
@@ -92,16 +105,8 @@ async function handleSubscriptionUpdated(sub: Stripe.Subscription) {
     ? new Date(periodEndUnix * 1000).toISOString()
     : null;
 
-  let tier = (profile as { tier: string }).tier;
-  if (mappedTier) {
-    tier = mappedTier;
-  }
-
-  let subscriptionStatus = sub.status;
-  if (sub.status === "trialing") {
-    subscriptionStatus = "trialing";
-    if (mappedTier) tier = mappedTier;
-  }
+  const subscriptionStatus =
+    sub.status === "trialing" ? "trialing" : sub.status;
 
   const { error } = await sb
     .from("profiles")
