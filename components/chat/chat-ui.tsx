@@ -321,7 +321,13 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
             console.error("[chat] save failed:", err);
           }
         },
-        [selectedProvider, selectedModel, selectedProjectId, isStandalone]
+        [
+          selectedProvider,
+          selectedModel,
+          selectedProjectId,
+          isStandalone,
+          resolveProjectIdForApi,
+        ]
       ),
     });
 
@@ -351,7 +357,7 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
       await hydrateConversationFromDb(cid, false);
       dbHydratedConversationRef.current = cid;
     })();
-  }, [conversationParam, searchParams, projects, modelOptions]);
+  }, [conversationParam, searchParams, projects, modelOptions, hydrateConversationFromDb]);
 
   useEffect(() => {
     if (searchParams.get("fromCompare") !== "1") return;
@@ -486,7 +492,14 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
         /* ignore */
       }
     }
-  }, [searchParams, setMessages, modelOptions, projects]);
+  }, [
+    searchParams,
+    setMessages,
+    modelOptions,
+    projects,
+    conversationParam,
+    hydrateConversationFromDb,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

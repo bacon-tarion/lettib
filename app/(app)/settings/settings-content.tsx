@@ -128,7 +128,6 @@ export function SettingsContent({
   const isTrialing = subscriptionStatus === "trialing";
   const isSubscribed =
     subscriptionTier === "pro" || subscriptionTier === "power";
-  const isPaid = isSubscribed || isLifetime;
   const isFree = subscriptionTier === "free";
 
   // Sync when the server re-renders after router.refresh()
