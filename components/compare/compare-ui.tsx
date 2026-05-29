@@ -41,9 +41,6 @@ import {
   WebSearchToggle,
 } from "@/components/web-search/toggle";
 import type { CompareProject, CompareConnection } from "@/app/(app)/compare/page";
-import {
-  compareModelLimitError,
-} from "@/lib/subscription/tier";
 import { STANDALONE_PROJECT_VALUE } from "@/components/chat/chat-organizer";
 import {
   FileAttachments,
@@ -260,12 +257,36 @@ export function CompareUI({
   const modelCap = Math.min(maxCompareModels, MAX_COMPARE_PARALLEL_MODELS);
 
   const showCompareModelLimitToast = useCallback(() => {
-    toast.error(compareModelLimitError(subscriptionTier), {
-      action: {
-        label: "Upgrade",
-        onClick: () => router.push("/pricing"),
-      },
-    });
+    switch (subscriptionTier) {
+      case "pro":
+        toast.error(
+          "Your Pro plan supports up to 4 models. Upgrade to Power for 6 models.",
+          {
+            action: {
+              label: "Upgrade",
+              onClick: () => router.push("/pricing"),
+            },
+          }
+        );
+        break;
+      case "power":
+        toast.error("6 models selected — that's the maximum for any plan.");
+        break;
+      case "lifetime_byok":
+        toast.error("6 models selected — that's the maximum.");
+        break;
+      default:
+        toast.error(
+          "Your Free plan supports up to 2 models. Upgrade to Pro or Power for more.",
+          {
+            action: {
+              label: "Upgrade",
+              onClick: () => router.push("/pricing"),
+            },
+          }
+        );
+        break;
+    }
   }, [router, subscriptionTier]);
 
   const [selectedValues, setSelectedValues] = useState<Set<string>>(() => {
