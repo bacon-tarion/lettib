@@ -26,6 +26,7 @@ import {
 import { calcCompareModelCost } from "@/lib/compare/cost";
 import { estimateCompareCost, formatCostRange } from "@/lib/cost-estimate";
 import { MAX_COMPARE_PARALLEL_MODELS } from "@/lib/compare/constants";
+import { COMPARE_PROMPT_SOFT_CHAR_LIMIT } from "@/lib/compare/context-limits";
 import type { Team } from "@/app/(app)/teams/actions";
 import {
   readCompareSnapshotFromStorage,
@@ -1997,6 +1998,13 @@ export function CompareUI({
           onClear={() => setPrompt("")}
           disabled={phase === "streaming" || phase === "saving"}
         />
+        {prompt.length > COMPARE_PROMPT_SOFT_CHAR_LIMIT && (
+          <p className="text-xs text-amber-600 dark:text-amber-500 mt-1.5">
+            Long prompts may fail on some models (especially Groq). Consider
+            shortening to under{" "}
+            {COMPARE_PROMPT_SOFT_CHAR_LIMIT.toLocaleString()} characters.
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">

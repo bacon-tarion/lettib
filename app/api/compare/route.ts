@@ -17,6 +17,10 @@ import {
   isGroqCompoundModel,
   streamGroqCompoundText,
 } from "@/lib/providers/groq-compound";
+import {
+  humanizeCompareLaneError,
+  prepareComparePayloadForProvider,
+} from "@/lib/compare/context-limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -805,6 +809,15 @@ export async function POST(req: NextRequest) {
           userContent = `${recap}\n\n---\n\nNew question:\n${prompt}`;
         }
 
+        const prepared = prepareComparePayloadForProvider(
+          spec.provider,
+          spec.model,
+          userContent,
+          systemPrompt
+        );
+        const laneUserContent = prepared.userContent;
+        const laneSystemPrompt = prepared.systemPrompt;
+
         let apiKey: string | null = null;
         let baseUrl: string | null = null;
 
@@ -875,8 +888,8 @@ export async function POST(req: NextRequest) {
             const usage = await streamAnthropicText({
               apiKey,
               model: spec.model,
-              userContent,
-              systemPrompt: systemPrompt || undefined,
+              userContent: laneUserContent,
+              systemPrompt: laneSystemPrompt || undefined,
               onText: (chunk) => {
                 accumulated += chunk;
                 enqueue({ type: "chunk", key, text: chunk });
@@ -896,8 +909,8 @@ export async function POST(req: NextRequest) {
             const usage = await streamGroqCompoundText({
               apiKey,
               model: compoundModel,
-              userContent,
-              systemPrompt: systemPrompt || undefined,
+              userContent: laneUserContent,
+              systemPrompt: laneSystemPrompt || undefined,
               onText: (chunk) => {
                 accumulated += chunk;
                 enqueue({ type: "chunk", key, text: chunk });
@@ -917,8 +930,8 @@ export async function POST(req: NextRequest) {
               model: spec.model,
               apiKey,
               baseUrl: baseUrl ?? undefined,
-              messages: [{ role: "user", content: userContent }],
-              systemPrompt: systemPrompt || undefined,
+              messages: [{ role: "user", content: laneUserContent }],
+              systemPrompt: laneSystemPrompt || undefined,
             });
 
             for await (const chunk of result.textStream) {
@@ -984,7 +997,8 @@ export async function POST(req: NextRequest) {
         try {
           await work();
         } catch (err) {
-          const message = err instanceof Error ? err.message : "Stream failed";
+          const raw = err instanceof Error ? err.message : "Stream failed";
+          const message = humanizeCompareLaneError(raw);
           console.error("[compare] lane failed:", key, err);
           enqueue({ type: "error", key, error: message });
           await persistAndEmitSaved(key, spec, position, {
