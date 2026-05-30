@@ -7,9 +7,9 @@ import { createGroq } from "@ai-sdk/groq";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CompareKeyMode } from "@/lib/compare/key-mode";
 import {
-  createServerGroqModel,
-  GROQ_SERVER_MODEL,
-} from "@/lib/providers/groq-server";
+  createServerGeminiModel,
+  SERVER_GEMINI_MODEL,
+} from "@/lib/providers/gemini-server";
 
 /** Preferred order when multiple BYOK providers are connected. */
 const BYOK_PROVIDER_PRIORITY = [
@@ -76,8 +76,8 @@ function modelIdForConnection(conn: ConnRow): string {
 }
 
 /**
- * Manual Compare synthesis uses the server GROQ_API_KEY.
- * BYOK Compare synthesis uses any connected user provider, else server Groq.
+ * Manual Compare synthesis uses the server GOOGLE_API_KEY.
+ * BYOK Compare synthesis uses any connected user provider, else server Gemini.
  */
 export async function resolveSynthesisProvider(
   serviceClient: SupabaseClient,
@@ -86,9 +86,9 @@ export async function resolveSynthesisProvider(
 ): Promise<SynthesisProviderConfig> {
   if (compareKeyMode === "manual") {
     return {
-      model: createServerGroqModel(GROQ_SERVER_MODEL),
-      provider: "groq",
-      modelId: GROQ_SERVER_MODEL,
+      model: createServerGeminiModel(SERVER_GEMINI_MODEL),
+      provider: "google",
+      modelId: SERVER_GEMINI_MODEL,
       compareKeyMode: "manual",
     };
   }
@@ -138,9 +138,9 @@ export async function resolveSynthesisProvider(
   }
 
   return {
-    model: createServerGroqModel(GROQ_SERVER_MODEL),
-    provider: "groq",
-    modelId: GROQ_SERVER_MODEL,
+    model: createServerGeminiModel(SERVER_GEMINI_MODEL),
+    provider: "google",
+    modelId: SERVER_GEMINI_MODEL,
     compareKeyMode: "manual",
   };
 }
