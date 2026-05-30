@@ -76,23 +76,15 @@ function modelIdForConnection(conn: ConnRow): string {
 }
 
 /**
- * Manual Compare synthesis uses the server GOOGLE_API_KEY.
- * BYOK Compare synthesis uses any connected user provider, else server Gemini.
+ * Resolve a synthesis model from the user's BYOK vault, optionally falling
+ * back to server Gemini when no usable key is found.
  */
 export async function resolveSynthesisProvider(
   serviceClient: SupabaseClient,
   userId: string,
-  compareKeyMode: CompareKeyMode
+  compareKeyMode: CompareKeyMode,
+  options?: { requireByok?: boolean }
 ): Promise<SynthesisProviderConfig> {
-  if (compareKeyMode === "manual") {
-    return {
-      model: createServerGeminiModel(SERVER_GEMINI_MODEL),
-      provider: "google",
-      modelId: SERVER_GEMINI_MODEL,
-      compareKeyMode: "manual",
-    };
-  }
-
   const { data: connections } = await serviceClient
     .from("api_connections")
     .select("provider, vault_secret_id, custom_base_url, custom_model_name")
@@ -130,17 +122,27 @@ export async function resolveSynthesisProvider(
         model,
         provider,
         modelId,
-        compareKeyMode: "byok",
+        compareKeyMode: compareKeyMode === "manual" ? "manual" : "byok",
       };
     } catch {
       continue;
     }
   }
 
+  if (options?.requireByok) {
+    throw new Error(
+      "Manual Compare requires at least one connected API key. Add a key in Settings → API Keys to use this feature."
+    );
+  }
+
+  console.warn(
+    `[synthesis] no BYOK provider available for user ${userId}; falling back to server Gemini`
+  );
+
   return {
     model: createServerGeminiModel(SERVER_GEMINI_MODEL),
     provider: "google",
     modelId: SERVER_GEMINI_MODEL,
-    compareKeyMode: "manual",
+    compareKeyMode,
   };
 }

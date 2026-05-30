@@ -3,22 +3,20 @@ import { generateText } from "ai";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers/models";
-import {
-  createServerGroqModel,
-  GROQ_SERVER_MODEL,
-} from "@/lib/providers/groq-server";
 import { SYNTHESIS_PROMPT } from "@/lib/prompts/synthesis";
 import {
   extractConflictsBlock,
   parseLineage,
 } from "@/lib/synthesis/lineage";
+import { resolveSynthesisProvider } from "@/lib/synthesis/resolve-provider";
 import { logUsageAsync } from "@/lib/usage/log";
 import { processUploadedFile } from "@/lib/files/extract-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SYNTH_PROVIDER = "groq";
+const MANUAL_COMPARE_BYOK_REQUIRED =
+  "Manual Compare requires at least one connected API key. Add a key in Settings → API Keys to use this feature.";
 
 interface ManualResponseInput {
   source: string;
@@ -46,12 +44,12 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "source";
 }
 
-function calcCost(tin: number, tout: number) {
+function calcCost(provider: string, model: string, tin: number, tout: number) {
   const catalog = MODELS_CATALOG as Record<
     string,
     readonly { id: string; cost_in: number; cost_out: number }[]
   >;
-  const entry = catalog[SYNTH_PROVIDER]?.find((m) => m.id === GROQ_SERVER_MODEL);
+  const entry = catalog[provider]?.find((m) => m.id === model);
   if (!entry) return 0;
   return (entry.cost_in * tin) / 1_000_000 + (entry.cost_out * tout) / 1_000_000;
 }
@@ -178,6 +176,17 @@ export async function POST(req: NextRequest) {
 
   const serviceClient = createServiceClient();
 
+  const { data: connections } = await serviceClient
+    .from("api_connections")
+    .select("id")
+    .eq("user_id", user.id)
+    .in("status", ["connected", "untested"])
+    .limit(1);
+
+  if (!connections || connections.length === 0) {
+    return NextResponse.json({ error: MANUAL_COMPARE_BYOK_REQUIRED }, { status: 403 });
+  }
+
   if (projectId) {
     const { data: proj } = await serviceClient
       .from("projects")
@@ -233,7 +242,28 @@ export async function POST(req: NextRequest) {
       .replace("{{responses}}", formattedResponses) + imageBlock;
 
   try {
-    const model = createServerGroqModel(GROQ_SERVER_MODEL);
+    let synthProvider: string;
+    let synthModelId: string;
+    let synthModel: Awaited<
+      ReturnType<typeof resolveSynthesisProvider>
+    >["model"];
+
+    try {
+      const resolved = await resolveSynthesisProvider(
+        serviceClient,
+        user.id,
+        "manual",
+        { requireByok: true }
+      );
+      synthProvider = resolved.provider;
+      synthModelId = resolved.modelId;
+      synthModel = resolved.model;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : MANUAL_COMPARE_BYOK_REQUIRED;
+      return NextResponse.json({ error: message }, { status: 403 });
+    }
+
     const startedAt = Date.now();
 
     type ContentPart =
@@ -246,13 +276,13 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await generateText({
-      model,
+      model: synthModel,
       messages: [{ role: "user", content: contentParts }],
     });
 
     const tokensIn = result.usage?.promptTokens ?? 0;
     const tokensOut = result.usage?.completionTokens ?? 0;
-    const cost = calcCost(tokensIn, tokensOut);
+    const cost = calcCost(synthProvider, synthModelId, tokensIn, tokensOut);
     const latency = Date.now() - startedAt;
 
     const { conflicts, bodyWithoutBlock } = extractConflictsBlock(result.text);
@@ -266,8 +296,8 @@ export async function POST(req: NextRequest) {
         project_id: projectId,
         prompt,
         content: bodyWithoutBlock,
-        provider: SYNTH_PROVIDER,
-        model: GROQ_SERVER_MODEL,
+        provider: synthProvider,
+        model: synthModelId,
         tone,
         tokens_in: tokensIn,
         tokens_out: tokensOut,
@@ -293,8 +323,8 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       conversationId: null,
       action: "synthesis_manual",
-      provider: SYNTH_PROVIDER,
-      model: GROQ_SERVER_MODEL,
+      provider: synthProvider,
+      model: synthModelId,
       tokensIn,
       tokensOut,
       costUsd: cost,
