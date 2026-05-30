@@ -29,8 +29,6 @@ export const MODELS_CATALOG = {
   groq: [
     { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B', context: 131072, cost_in: 0, cost_out: 0, free: true },
     { id: 'llama-3.1-8b-instant',    name: 'Llama 3.1 8B',  context: 131072, cost_in: 0, cost_out: 0, free: true },
-    { id: 'groq/compound',           name: 'Compound',      context: 131072, cost_in: 0, cost_out: 0, free: true },
-    { id: 'groq/compound-mini',      name: 'Compound Mini', context: 131072, cost_in: 0, cost_out: 0, free: true },
   ],
   custom: [
     { id: 'custom', name: 'Custom Model', context: 128000, cost_in: 0, cost_out: 0, free: false },
