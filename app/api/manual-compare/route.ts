@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { MODELS_CATALOG } from "@/lib/providers/models";
 import { SYNTHESIS_PROMPT } from "@/lib/prompts/synthesis";
+import { LETTIB_SYNTHESIS_CLEAN_PROMPT } from "@/lib/prompts/synthesis-clean";
 import {
   extractConflictsBlock,
   parseLineage,
@@ -288,6 +289,41 @@ export async function POST(req: NextRequest) {
     const { conflicts, bodyWithoutBlock } = extractConflictsBlock(result.text);
     const { lineage } = parseLineage(bodyWithoutBlock);
 
+    let cleanContent: string | null = null;
+    let cleanTokensIn = 0;
+    let cleanTokensOut = 0;
+    let cleanCost = 0;
+    let cleanLatency = 0;
+    try {
+      const cleanPrompt = LETTIB_SYNTHESIS_CLEAN_PROMPT.replace(
+        "{{user_question}}",
+        prompt
+      )
+        .replace("{{tone}}", tone)
+        .replace("{{detailed_synthesis}}", bodyWithoutBlock);
+
+      const cleanStartedAt = Date.now();
+      const cleanResult = await generateText({
+        model: synthModel,
+        messages: [{ role: "user", content: cleanPrompt }],
+      });
+      cleanLatency = Date.now() - cleanStartedAt;
+      cleanTokensIn = cleanResult.usage?.promptTokens ?? 0;
+      cleanTokensOut = cleanResult.usage?.completionTokens ?? 0;
+      cleanCost = calcCost(
+        synthProvider,
+        synthModelId,
+        cleanTokensIn,
+        cleanTokensOut
+      );
+      cleanContent = cleanResult.text.trim();
+    } catch (cleanErr) {
+      console.error(
+        "[manual-compare] clean pass failed (Detailed still saved):",
+        cleanErr
+      );
+    }
+
     const { data: synthRow, error: synthError } = await serviceClient
       .from("syntheses")
       .insert({
@@ -296,6 +332,8 @@ export async function POST(req: NextRequest) {
         project_id: projectId,
         prompt,
         content: bodyWithoutBlock,
+        detailed_content: bodyWithoutBlock,
+        clean_content: cleanContent,
         provider: synthProvider,
         model: synthModelId,
         tone,
@@ -303,6 +341,12 @@ export async function POST(req: NextRequest) {
         tokens_out: tokensOut,
         cost_usd: cost,
         latency_ms: latency,
+        clean_provider: cleanContent ? synthProvider : null,
+        clean_model: cleanContent ? synthModelId : null,
+        clean_tokens_in: cleanTokensIn,
+        clean_tokens_out: cleanTokensOut,
+        clean_cost_usd: cleanCost,
+        clean_latency_ms: cleanLatency,
         source_response_ids: [],
         lineage_data: lineage,
         conflict_resolutions: conflicts.map((c) => ({ ...c, chosen: null })),
@@ -330,6 +374,20 @@ export async function POST(req: NextRequest) {
       costUsd: cost,
       latencyMs: latency,
     });
+
+    if (cleanContent) {
+      logUsageAsync(serviceClient, {
+        userId: user.id,
+        conversationId: null,
+        action: "synthesis_clean",
+        provider: synthProvider,
+        model: synthModelId,
+        tokensIn: cleanTokensIn,
+        tokensOut: cleanTokensOut,
+        costUsd: cleanCost,
+        latencyMs: cleanLatency,
+      });
+    }
 
     return NextResponse.json({
       success: true,

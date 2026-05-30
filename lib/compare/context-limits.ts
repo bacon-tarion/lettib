@@ -5,6 +5,30 @@ export const COMPARE_PROMPT_SOFT_CHAR_LIMIT = 4000;
 
 const GROQ_MAX_TOTAL_TOKENS = 8000;
 const GROQ_MAX_HISTORY_TOKENS = 4000;
+const GROQ_COMPOUND_MAX_TOTAL_TOKENS = 4000;
+const GROQ_COMPOUND_MAX_HISTORY_TOKENS = 2000;
+
+/** Groq Compound lanes use smaller effective context than Llama Groq models. */
+export const GROQ_COMPOUND_MODEL_IDS = [
+  "groq/compound",
+  "groq/compound-mini",
+] as const;
+
+function groqCompareTokenLimits(model: string): {
+  maxTotalTokens: number;
+  maxHistoryTokens: number;
+} {
+  if (GROQ_COMPOUND_MODEL_IDS.includes(model as (typeof GROQ_COMPOUND_MODEL_IDS)[number])) {
+    return {
+      maxTotalTokens: GROQ_COMPOUND_MAX_TOTAL_TOKENS,
+      maxHistoryTokens: GROQ_COMPOUND_MAX_HISTORY_TOKENS,
+    };
+  }
+  return {
+    maxTotalTokens: GROQ_MAX_TOTAL_TOKENS,
+    maxHistoryTokens: GROQ_MAX_HISTORY_TOKENS,
+  };
+}
 
 const FOLLOW_UP_HISTORY_SEP = "\n\n---\n\nNew question:\n";
 
@@ -39,15 +63,19 @@ export type FitGroqComparePayloadResult = ComparePayload & {
  * Groq compare lanes can fail with HTTP 413 when recap + system context is
  * too large. Trim history first, then system prompt, then user content.
  */
-export function fitGroqComparePayload(input: ComparePayload): FitGroqComparePayloadResult {
+export function fitGroqComparePayload(
+  input: ComparePayload,
+  model: string
+): FitGroqComparePayloadResult {
   let userContent = input.userContent;
   let systemPrompt = input.systemPrompt;
   let truncated = false;
+  const { maxTotalTokens, maxHistoryTokens } = groqCompareTokenLimits(model);
 
   const totalTokens = () =>
     estimateTextTokens(userContent) + estimateTextTokens(systemPrompt);
 
-  if (totalTokens() <= GROQ_MAX_TOTAL_TOKENS) {
+  if (totalTokens() <= maxTotalTokens) {
     return { userContent, systemPrompt, truncated: false };
   }
 
@@ -57,16 +85,16 @@ export function fitGroqComparePayload(input: ComparePayload): FitGroqComparePayl
     const suffix = userContent.slice(sepIdx);
     const trimmedRecap = truncateTextToTokenBudgetFromEnd(
       recap,
-      GROQ_MAX_HISTORY_TOKENS
+      maxHistoryTokens
     );
     if (trimmedRecap !== recap) truncated = true;
     userContent = trimmedRecap + suffix;
   }
 
-  if (totalTokens() > GROQ_MAX_TOTAL_TOKENS && systemPrompt) {
+  if (totalTokens() > maxTotalTokens && systemPrompt) {
     const systemBudget = Math.max(
       0,
-      GROQ_MAX_TOTAL_TOKENS - estimateTextTokens(userContent)
+      maxTotalTokens - estimateTextTokens(userContent)
     );
     const trimmedSystem = truncateTextToTokenBudgetFromEnd(
       systemPrompt,
@@ -76,10 +104,10 @@ export function fitGroqComparePayload(input: ComparePayload): FitGroqComparePayl
     systemPrompt = trimmedSystem;
   }
 
-  if (totalTokens() > GROQ_MAX_TOTAL_TOKENS) {
+  if (totalTokens() > maxTotalTokens) {
     const userBudget = Math.max(
       0,
-      GROQ_MAX_TOTAL_TOKENS - estimateTextTokens(systemPrompt)
+      maxTotalTokens - estimateTextTokens(systemPrompt)
     );
     const trimmedUser = truncateTextToTokenBudgetFromEnd(userContent, userBudget);
     if (trimmedUser !== userContent) truncated = true;
@@ -111,7 +139,7 @@ export function prepareComparePayloadForProvider(
   systemPrompt: string
 ): ComparePayload {
   if (provider === "groq") {
-    return fitGroqComparePayload({ userContent, systemPrompt });
+    return fitGroqComparePayload({ userContent, systemPrompt }, model);
   }
 
   const contextLimit = modelContextLimit(provider, model);
