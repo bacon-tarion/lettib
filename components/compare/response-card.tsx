@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ExternalLink,
   Loader2,
+  Maximize2,
   MessageSquare,
   RotateCcw,
   Send,
@@ -64,6 +65,12 @@ export interface ResponseCardProps {
   onRetry?: () => void;
   /** Opens a new Chat tab with this model and the compare thread (parent gates visibility). */
   onContinueInChat?: () => void;
+  /** Label for the continue-in-chat action (defaults to "Continue in Chat"). */
+  continueInChatLabel?: string;
+  /** Opens a full-screen focus overlay (grid cards only). */
+  onExpand?: () => void;
+  /** Removes scroll cap for focus overlay rendering. */
+  expanded?: boolean;
 
   // ─── Session 11: per-model / per-response controls ─────────────────────
   /** Shown only on the LATEST card per model (parent decides). */
@@ -185,6 +192,9 @@ export function ResponseCard({
   isBranch = false,
   onRetry,
   onContinueInChat,
+  continueInChatLabel = "Continue in Chat",
+  onExpand,
+  expanded = false,
   continueWithModel,
   useInSynthesis,
   askThisModel,
@@ -212,8 +222,20 @@ export function ResponseCard({
   const isInteractive = isDone;
 
   return (
-    <Card className={cn("flex flex-col h-full border-l-4", style.border)}>
-      <CardHeader className="pb-2 space-y-1.5">
+    <Card className={cn("relative flex flex-col h-full border-l-4", style.border)}>
+      {onExpand && !expanded && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="absolute top-2 right-2 h-7 w-7 z-10 opacity-70 hover:opacity-100"
+          aria-label="Expand response"
+          onClick={onExpand}
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+        </Button>
+      )}
+      <CardHeader className={cn("pb-2 space-y-1.5", onExpand && !expanded && "pr-9")}>
         <div className="flex items-center gap-2">
           <div
             className={cn(
@@ -268,7 +290,12 @@ export function ResponseCard({
         </div>
       </CardHeader>
 
-      <CardContent className="flex-1 overflow-y-auto max-h-72 space-y-2">
+      <CardContent
+        className={cn(
+          "flex-1 overflow-y-auto space-y-2",
+          !expanded && "max-h-72"
+        )}
+      >
         {status === "error" ? (
           <div className="space-y-3">
             <div className="flex items-start gap-2 text-sm text-destructive">
@@ -406,7 +433,7 @@ export function ResponseCard({
                 onClick={onContinueInChat}
               >
                 <MessageSquare className="h-3 w-3" />
-                Continue in Chat
+                {continueInChatLabel}
               </Button>
             )}
           </div>

@@ -17,7 +17,9 @@ import {
 import {
   ResponseCard,
   type ResponseCardScores,
+  type ResponseCardProps,
 } from "@/components/compare/response-card";
+import { ResponseFocusOverlay } from "@/components/compare/response-focus-overlay";
 import {
   MODELS_CATALOG,
   getModelDisplayName,
@@ -252,6 +254,7 @@ export function CompareUI({
     blocked: boolean;
   } | null>(null);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [focusedResponseKey, setFocusedResponseKey] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState<string | null>(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useWebSearchPreference();
@@ -1741,6 +1744,105 @@ export function CompareUI({
 
   const synthesisCount = selectedSynthesisCount();
 
+  const focusedContext = useMemo(() => {
+    if (!focusedResponseKey) return null;
+    for (const round of rounds) {
+      const r = round.responses.find((x) => x.key === focusedResponseKey);
+      if (r) return { r, round };
+    }
+    return null;
+  }, [focusedResponseKey, rounds]);
+
+  function buildResponseCardProps(
+    r: ResponseState,
+    round: CompareRound,
+    options?: {
+      onExpand?: () => void;
+      expanded?: boolean;
+      continueInChatLabel?: string;
+    }
+  ): ResponseCardProps {
+    const mk = modelKeyOf(r.provider, r.model);
+    const isLatestForModel = latestKeyByModel.get(mk) === r.key;
+    const isComplete =
+      r.status === "done" && !r.error && !!r.content.trim();
+
+    return {
+      provider: r.provider,
+      providerLabel: getProviderLabel(r.provider),
+      model: r.model,
+      modelLabel: r.modelLabel,
+      content: r.content,
+      status:
+        retryingKey === r.key
+          ? "streaming"
+          : r.status === "pending" &&
+              (mainBatchStreaming || followUpInFlight || askingModelKey === mk)
+            ? "pending"
+            : r.status,
+      error: r.error,
+      tokensIn: r.tokensIn,
+      tokensOut: r.tokensOut,
+      cost: calcCompareModelCost(
+        r.provider,
+        r.model,
+        r.tokensIn,
+        r.tokensOut
+      ),
+      latencyMs: r.latencyMs,
+      scores: r.scores,
+      isBranch: round.kind === "branch",
+      onRetry:
+        r.status === "error" && conversationId && !retryingKey
+          ? () => void retryOne(r)
+          : undefined,
+      onContinueInChat:
+        isComplete && conversationId && !retryingKey
+          ? () => continueModelToChat(r, promptForResponseKey(r.key))
+          : undefined,
+      continueInChatLabel: options?.continueInChatLabel,
+      useInSynthesis: isComplete
+        ? {
+            checked: useInSynthesisByKey[r.key] !== false,
+            onChange: (next) =>
+              setUseInSynthesisByKey((prev) => ({
+                ...prev,
+                [r.key]: next,
+              })),
+          }
+        : undefined,
+      continueWithModel:
+        isComplete && isLatestForModel
+          ? {
+              checked: continueByModelKey[mk] !== false,
+              onChange: (next) =>
+                setContinueByModelKey((prev) => ({
+                  ...prev,
+                  [mk]: next,
+                })),
+            }
+          : undefined,
+      askThisModel:
+        isComplete &&
+        isLatestForModel &&
+        conversationId &&
+        !retryingKey
+          ? {
+              onSubmit: (text) => askThisModel(r.provider, r.model, text),
+              isStreaming: askingModelKey === mk,
+            }
+          : undefined,
+      grade: isComplete
+        ? {
+            onClick: () => gradeResponses([r.key]),
+            isGrading: !!gradingKeys[r.key],
+          }
+        : undefined,
+      onExpand: options?.onExpand,
+      expanded: options?.expanded,
+    };
+  }
+
   if (connections.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center gap-4">
@@ -2093,102 +2195,14 @@ export function CompareUI({
                     : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
                 }
               >
-                {round.responses.map((r) => {
-                  const mk = modelKeyOf(r.provider, r.model);
-                  const isLatestForModel = latestKeyByModel.get(mk) === r.key;
-                  const isComplete =
-                    r.status === "done" && !r.error && !!r.content.trim();
-                  return (
-                    <ResponseCard
-                      key={r.key}
-                      provider={r.provider}
-                      providerLabel={getProviderLabel(r.provider)}
-                      model={r.model}
-                      modelLabel={r.modelLabel}
-                      content={r.content}
-                      status={
-                        retryingKey === r.key
-                          ? "streaming"
-                          : r.status === "pending" &&
-                              (mainBatchStreaming ||
-                                followUpInFlight ||
-                                askingModelKey === mk)
-                            ? "pending"
-                            : r.status
-                      }
-                      error={r.error}
-                      tokensIn={r.tokensIn}
-                      tokensOut={r.tokensOut}
-                      cost={calcCompareModelCost(
-                        r.provider,
-                        r.model,
-                        r.tokensIn,
-                        r.tokensOut
-                      )}
-                      latencyMs={r.latencyMs}
-                      scores={r.scores}
-                      isBranch={round.kind === "branch"}
-                      onRetry={
-                        r.status === "error" && conversationId && !retryingKey
-                          ? () => void retryOne(r)
-                          : undefined
-                      }
-                      onContinueInChat={
-                        isComplete && conversationId && !retryingKey
-                          ? () =>
-                              continueModelToChat(
-                                r,
-                                promptForResponseKey(r.key)
-                              )
-                          : undefined
-                      }
-                      useInSynthesis={
-                        isComplete
-                          ? {
-                              checked: useInSynthesisByKey[r.key] !== false,
-                              onChange: (next) =>
-                                setUseInSynthesisByKey((prev) => ({
-                                  ...prev,
-                                  [r.key]: next,
-                                })),
-                            }
-                          : undefined
-                      }
-                      continueWithModel={
-                        isComplete && isLatestForModel
-                          ? {
-                              checked: continueByModelKey[mk] !== false,
-                              onChange: (next) =>
-                                setContinueByModelKey((prev) => ({
-                                  ...prev,
-                                  [mk]: next,
-                                })),
-                            }
-                          : undefined
-                      }
-                      askThisModel={
-                        isComplete &&
-                        isLatestForModel &&
-                        conversationId &&
-                        !retryingKey
-                          ? {
-                              onSubmit: (text) =>
-                                askThisModel(r.provider, r.model, text),
-                              isStreaming: askingModelKey === mk,
-                            }
-                          : undefined
-                      }
-                      grade={
-                        isComplete
-                          ? {
-                              onClick: () => gradeResponses([r.key]),
-                              isGrading: !!gradingKeys[r.key],
-                            }
-                          : undefined
-                      }
-                    />
-                  );
-                })}
+                {round.responses.map((r) => (
+                  <ResponseCard
+                    key={r.key}
+                    {...buildResponseCardProps(r, round, {
+                      onExpand: () => setFocusedResponseKey(r.key),
+                    })}
+                  />
+                ))}
               </div>
             </div>
           ))}
@@ -2317,6 +2331,23 @@ export function CompareUI({
       )}
     </div>
       </div>
+
+      {focusedContext && (
+        <ResponseFocusOverlay
+          open={!!focusedResponseKey}
+          onOpenChange={(open) => {
+            if (!open) setFocusedResponseKey(null);
+          }}
+          title={`${getProviderLabel(focusedContext.r.provider)} · ${focusedContext.r.modelLabel}`}
+        >
+          <ResponseCard
+            {...buildResponseCardProps(focusedContext.r, focusedContext.round, {
+              expanded: true,
+              continueInChatLabel: "Continue in Chat with this model",
+            })}
+          />
+        </ResponseFocusOverlay>
+      )}
     </div>
   );
 }

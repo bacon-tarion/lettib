@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Star } from "lucide-react";
+import { Brain, Pin } from "lucide-react";
+import { toast } from "sonner";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Brain } from "lucide-react";
 import { togglePin } from "@/app/(app)/projects/actions";
 import { cn } from "@/lib/utils";
 
@@ -43,15 +43,31 @@ export function ProjectCard({
 }: ProjectCardProps) {
   const router = useRouter();
   const [pinning, setPinning] = useState(false);
+  const [optimisticPinned, setOptimisticPinned] = useState(pinned);
+
+  useEffect(() => {
+    setOptimisticPinned(pinned);
+  }, [pinned]);
 
   async function handleTogglePin(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     if (pinning) return;
+
+    const nextPinned = !optimisticPinned;
+    setOptimisticPinned(nextPinned);
     setPinning(true);
     try {
-      await togglePin(id, !pinned);
+      const result = await togglePin(id, nextPinned);
+      if (result.error) {
+        setOptimisticPinned(!nextPinned);
+        toast.error(result.error);
+        return;
+      }
       router.refresh();
+    } catch {
+      setOptimisticPinned(!nextPinned);
+      toast.error("Could not update pin status.");
     } finally {
       setPinning(false);
     }
@@ -66,13 +82,15 @@ export function ProjectCard({
           size="icon"
           className="absolute top-2 right-2 h-8 w-8 z-10 opacity-70 hover:opacity-100"
           disabled={pinning}
-          aria-label={pinned ? "Unpin project" : "Pin project"}
+          aria-label={optimisticPinned ? "Unpin project" : "Pin project"}
           onClick={handleTogglePin}
         >
-          <Star
+          <Pin
             className={cn(
               "h-4 w-4",
-              pinned ? "fill-amber-400 text-amber-400" : "text-muted-foreground"
+              optimisticPinned
+                ? "fill-primary text-primary"
+                : "text-muted-foreground"
             )}
           />
         </Button>
