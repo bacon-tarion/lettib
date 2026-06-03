@@ -68,6 +68,15 @@ const TONES = [
   { value: "persuasive", label: "Persuasive" },
 ];
 
+const SYNTHESIS_PROVIDER_ORDER = [
+  "anthropic",
+  "openai",
+  "google",
+  "xai",
+  "groq",
+  "custom",
+] as const;
+
 type ModelPick = {
   value: string;
   label: string;
@@ -243,6 +252,7 @@ export function CompareUI({
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [synthLoading, setSynthLoading] = useState(false);
+  const [synthesisProvider, setSynthesisProvider] = useState<string>("auto");
   /** Latest synthesis for this compare conversation (for quick navigation back). */
   const [latestSynthesisId, setLatestSynthesisId] = useState<string | null>(null);
   const [showRestoreBanner, setShowRestoreBanner] = useState(false);
@@ -659,6 +669,20 @@ export function CompareUI({
       0
     );
   }, [flatResponses]);
+
+  const connectedSynthesisProviders = useMemo(() => {
+    const connected = new Set(connections.map((c) => c.provider));
+    return SYNTHESIS_PROVIDER_ORDER.filter((p) => connected.has(p)) as string[];
+  }, [connections]);
+
+  useEffect(() => {
+    if (
+      synthesisProvider !== "auto" &&
+      !connectedSynthesisProviders.includes(synthesisProvider)
+    ) {
+      setSynthesisProvider("auto");
+    }
+  }, [connectedSynthesisProviders, synthesisProvider]);
 
   function applyTeamPreset(teamKey: string) {
     setTeamPresetId(teamKey);
@@ -1557,6 +1581,7 @@ export function CompareUI({
           tone: selectedTone,
           project_id: resolveCompareProjectId(selectedProjectId),
           source_response_ids: sourceIds,
+          synthesis_provider: synthesisProvider,
         }),
       });
       const data = await res.json();
@@ -2249,6 +2274,36 @@ export function CompareUI({
                   )}
                   Grade selected responses
                 </Button>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    Synthesize with:
+                  </span>
+                  <Select
+                    value={synthesisProvider}
+                    onValueChange={setSynthesisProvider}
+                  >
+                    <SelectTrigger className="h-8 w-full sm:w-44 text-xs">
+                      <SelectValue placeholder="Auto (recommended)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto" className="text-xs">
+                        Auto (recommended)
+                      </SelectItem>
+                      {connectedSynthesisProviders.map((provider) => (
+                        <SelectItem
+                          key={provider}
+                          value={provider}
+                          className="text-xs"
+                        >
+                          {getProviderLabel(provider)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <Button

@@ -75,6 +75,43 @@ function modelIdForConnection(conn: ConnRow): string {
   return DEFAULT_MODEL_BY_PROVIDER[conn.provider] ?? "gpt-4o-mini";
 }
 
+async function tryResolveByokProvider(
+  provider: string,
+  conn: ConnRow | undefined,
+  serviceClient: SupabaseClient,
+  compareKeyMode: CompareKeyMode
+): Promise<SynthesisProviderConfig | null> {
+  if (!conn) return null;
+
+  const { data: apiKey, error: vaultError } = await serviceClient.rpc(
+    "lettib_read_secret",
+    { p_secret_id: conn.vault_secret_id }
+  );
+  if (vaultError || !apiKey) return null;
+
+  const trimmedKey =
+    typeof apiKey === "string" ? apiKey.trim() : String(apiKey).trim();
+  if (!trimmedKey) return null;
+
+  const modelId = modelIdForConnection(conn);
+  try {
+    const model = buildByokModel(
+      provider,
+      trimmedKey,
+      modelId,
+      conn.custom_base_url
+    );
+    return {
+      model,
+      provider,
+      modelId,
+      compareKeyMode: compareKeyMode === "manual" ? "manual" : "byok",
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resolve a synthesis model from the user's BYOK vault, optionally falling
  * back to server Gemini when no usable key is found.
@@ -83,7 +120,7 @@ export async function resolveSynthesisProvider(
   serviceClient: SupabaseClient,
   userId: string,
   compareKeyMode: CompareKeyMode,
-  options?: { requireByok?: boolean }
+  options?: { requireByok?: boolean; preferredProvider?: string | null }
 ): Promise<SynthesisProviderConfig> {
   const { data: connections } = await serviceClient
     .from("api_connections")
@@ -96,37 +133,29 @@ export async function resolveSynthesisProvider(
     connByProvider.set(c.provider, c);
   }
 
-  for (const provider of BYOK_PROVIDER_PRIORITY) {
-    const conn = connByProvider.get(provider);
-    if (!conn) continue;
-
-    const { data: apiKey, error: vaultError } = await serviceClient.rpc(
-      "lettib_read_secret",
-      { p_secret_id: conn.vault_secret_id }
+  const preferred = options?.preferredProvider?.trim();
+  if (preferred && preferred !== "auto") {
+    const preferredResolved = await tryResolveByokProvider(
+      preferred,
+      connByProvider.get(preferred),
+      serviceClient,
+      compareKeyMode
     );
-    if (vaultError || !apiKey) continue;
+    if (preferredResolved) return preferredResolved;
+  }
 
-    const trimmedKey =
-      typeof apiKey === "string" ? apiKey.trim() : String(apiKey).trim();
-    if (!trimmedKey) continue;
-
-    const modelId = modelIdForConnection(conn);
-    try {
-      const model = buildByokModel(
-        provider,
-        trimmedKey,
-        modelId,
-        conn.custom_base_url
-      );
-      return {
-        model,
-        provider,
-        modelId,
-        compareKeyMode: compareKeyMode === "manual" ? "manual" : "byok",
-      };
-    } catch {
+  for (const provider of BYOK_PROVIDER_PRIORITY) {
+    if (preferred && preferred !== "auto" && provider === preferred) {
       continue;
     }
+
+    const resolved = await tryResolveByokProvider(
+      provider,
+      connByProvider.get(provider),
+      serviceClient,
+      compareKeyMode
+    );
+    if (resolved) return resolved;
   }
 
   if (options?.requireByok) {

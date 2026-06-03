@@ -73,6 +73,8 @@ export async function POST(req: NextRequest) {
     source_response_ids?: unknown;
     /** manual = server GROQ_API_KEY; byok = user vault (Anthropic). */
     compare_key_mode?: unknown;
+    /** Optional BYOK provider override; "auto" or omitted uses priority order. */
+    synthesis_provider?: unknown;
   };
 
   const requestedSourceIds = Array.isArray(rawSourceIds)
@@ -115,6 +117,15 @@ export async function POST(req: NextRequest) {
     parseCompareKeyMode(body.compare_key_mode) ??
     parseCompareKeyMode(convRow.compare_key_mode) ??
     DEFAULT_COMPARE_KEY_MODE;
+
+  const synthesisProvider =
+    typeof body.synthesis_provider === "string"
+      ? body.synthesis_provider.trim()
+      : undefined;
+  const preferredProvider =
+    synthesisProvider && synthesisProvider !== "auto"
+      ? synthesisProvider
+      : undefined;
 
   let projectId: string | null = convRow.project_id ?? null;
   if (bodyProjectId) {
@@ -205,7 +216,8 @@ export async function POST(req: NextRequest) {
     const resolved = await resolveSynthesisProvider(
       serviceClient,
       user.id,
-      compareKeyMode
+      compareKeyMode,
+      { preferredProvider }
     );
     synthProvider = resolved.provider;
     synthModelId = resolved.modelId;
