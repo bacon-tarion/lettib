@@ -249,14 +249,22 @@ export function ManualCompareUI({ hasConnectedApiKey }: ManualCompareUIProps) {
 
       <div className="space-y-2">
         <Label htmlFor="prompt">What question did you ask?</Label>
-        <ClearableTextarea
-          id="prompt"
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onClear={() => setPrompt("")}
-          placeholder="e.g. What's the best way to structure a Series A pitch deck?"
-          className="min-h-[80px] resize-none"
-        />
+        <FileAttachments
+          files={attachedFiles}
+          onChange={setAttachedFiles}
+          disabled={submitting}
+          dropZone
+          dropZoneHint="Drop files here or click to attach"
+        >
+          <ClearableTextarea
+            id="prompt"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onClear={() => setPrompt("")}
+            placeholder="e.g. What's the best way to structure a Series A pitch deck?"
+            className="min-h-[80px] resize-none border-0 bg-transparent focus-visible:ring-0 shadow-none"
+          />
+        </FileAttachments>
       </div>
 
       <div className="space-y-4">
@@ -265,11 +273,6 @@ export function ManualCompareUI({ hasConnectedApiKey }: ManualCompareUIProps) {
             Pasted responses ({totalSources} sources)
           </h2>
           <div className="flex gap-2">
-            <FileAttachments
-              files={attachedFiles}
-              onChange={setAttachedFiles}
-              disabled={submitting}
-            />
             <Button
               type="button"
               variant="outline"
@@ -285,12 +288,10 @@ export function ManualCompareUI({ hasConnectedApiKey }: ManualCompareUIProps) {
         </div>
 
         {attachedFiles.length > 0 && (
-          <div className="rounded-lg border border-dashed p-3 space-y-2">
-            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-              <Upload className="h-3.5 w-3.5" />
-              Uploaded files count as additional model sources
-            </p>
-          </div>
+          <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Upload className="h-3.5 w-3.5" />
+            Uploaded files count as additional model sources
+          </p>
         )}
 
         {boxes.map((box, idx) => (

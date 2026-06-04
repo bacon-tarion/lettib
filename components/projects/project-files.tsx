@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Upload, FileText, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 type ProjectFile = {
   id: string;
@@ -25,6 +26,7 @@ export function ProjectFiles({ projectId }: { projectId: string }) {
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -84,17 +86,38 @@ export function ProjectFiles({ projectId }: { projectId: string }) {
   return (
     <div className="space-y-3">
       <div
-        className="border-2 border-dashed rounded-lg p-6 text-center hover:bg-muted/30 transition cursor-pointer"
+        className={cn(
+          "border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer bg-card/30",
+          dragOver
+            ? "border-primary bg-primary/10 ring-1 ring-primary/30"
+            : "border-muted-foreground/25 hover:border-muted-foreground/40 hover:bg-muted/30"
+        )}
         onClick={() => inputRef.current?.click()}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          if (!uploading) setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setDragOver(false);
+          }
+        }}
         onDragOver={(e) => {
           e.preventDefault();
         }}
         onDrop={(e) => {
           e.preventDefault();
+          setDragOver(false);
           handleFiles(e.dataTransfer.files);
         }}
       >
-        <Upload className="h-6 w-6 mx-auto text-muted-foreground mb-2" />
+        <Upload
+          className={cn(
+            "h-6 w-6 mx-auto mb-2",
+            dragOver ? "text-primary" : "text-muted-foreground"
+          )}
+        />
         <p className="text-sm font-medium">
           {uploading ? "Uploading…" : "Drop files here or click to upload"}
         </p>

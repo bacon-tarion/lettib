@@ -789,20 +789,12 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
           onChange={setAttachedFiles}
           disabled={isLoading}
           selectedModelId={selectedModel}
-          showButton={false}
-        />
-        <div className="relative">
-          <FileAttachments
-            files={attachedFiles}
-            onChange={setAttachedFiles}
-            disabled={isLoading}
-            selectedModelId={selectedModel}
-            showChips={false}
-            className="absolute left-1 bottom-1 z-10"
-          />
+          dropZone
+          dropZoneHint="Drop files here or click to attach"
+        >
           <ClearableTextarea
             placeholder="Ask anything… (⌘Enter to send)"
-            className="resize-none pr-12 pl-10 min-h-[80px]"
+            className="resize-none pr-12 pl-10 min-h-[80px] border-0 bg-transparent focus-visible:ring-0 shadow-none"
             value={input}
             onChange={handleInputChange}
             onClear={() => setInput("")}
@@ -813,12 +805,12 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
           <Button
             type="submit"
             size="icon"
-            className="absolute right-2 bottom-2 h-8 w-8"
+            className="absolute right-2 bottom-2 h-8 w-8 z-10"
             disabled={!input.trim() || isLoading}
           >
             <Send className="h-4 w-4" />
           </Button>
-        </div>
+        </FileAttachments>
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             {isLoading && <span className="animate-pulse">Streaming…</span>}

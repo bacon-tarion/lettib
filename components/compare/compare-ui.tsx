@@ -469,7 +469,6 @@ export function CompareUI({
         const byRoundIdx = new Map<number, ResponseState[]>();
         const roundKindByIdx = new Map<number, "main" | "branch">();
         const seenContinue: Record<string, boolean> = {};
-        const seenSynthesis: Record<string, boolean> = {};
         for (const mr of data.model_responses ?? []) {
           const ri =
             typeof mr.round_index === "number" ? mr.round_index : 0;
@@ -508,7 +507,6 @@ export function CompareUI({
             responseId: mr.id,
           });
           seenContinue[modelKeyOf(mr.provider, mr.model)] = true;
-          if (!mr.error && mr.content?.trim()) seenSynthesis[key] = true;
         }
         for (const [, arr] of Array.from(byRoundIdx.entries())) {
           arr.sort((a: ResponseState, b: ResponseState) => a.position - b.position);
@@ -530,12 +528,24 @@ export function CompareUI({
           });
         }
 
+        const latestRoundIdx = built.length - 1;
+        const synthesisDefaults: Record<string, boolean> = {};
+        for (let i = 0; i < built.length; i++) {
+          for (const r of built[i]!.responses) {
+            synthesisDefaults[r.key] =
+              i === latestRoundIdx &&
+              r.status === "done" &&
+              !r.error &&
+              !!r.content.trim();
+          }
+        }
+
         setConversationId(data.conversation.id);
         setSessionTitle(data.conversation.title ?? null);
         setRounds(built);
         setPrompt(built[0]?.prompt ?? "");
         setContinueByModelKey(seenContinue);
-        setUseInSynthesisByKey(seenSynthesis);
+        setUseInSynthesisByKey(synthesisDefaults);
         setPhase("done");
         setShowRestoreBanner(true);
         setLatestSynthesisId(data.latest_synthesis?.id ?? null);
@@ -755,6 +765,18 @@ export function CompareUI({
       }
       roundsRef.current = cur;
       setRounds(cur);
+
+      // Latest round checked for synthesis; all prior rounds unchecked.
+      setUseInSynthesisByKey((prev) => {
+        const out = { ...prev };
+        for (let i = 0; i < roundIndex; i++) {
+          for (const r of cur[i]!.responses) out[r.key] = false;
+        }
+        for (const r of round.responses) {
+          if (out[r.key] === undefined) out[r.key] = true;
+        }
+        return out;
+      });
     },
     []
   );
@@ -848,14 +870,21 @@ export function CompareUI({
                 tokensOut: obj.tokens_out ?? 0,
                 latencyMs: obj.latency_ms,
               });
-              // Default a freshly-completed response into Synthesis.
-              // Don't overwrite an explicit user opt-out from a prior
-              // run (rare during streaming, but possible after a retry).
-              setUseInSynthesisByKey((prev) =>
-                prev[obj.key] === undefined
-                  ? { ...prev, [obj.key]: true }
-                  : prev
-              );
+              // Default into Synthesis only for the latest round.
+              setUseInSynthesisByKey((prev) => {
+                if (prev[obj.key] !== undefined) return prev;
+                let roundIdx = -1;
+                for (let i = 0; i < roundsRef.current.length; i++) {
+                  if (
+                    roundsRef.current[i]!.responses.some((r) => r.key === obj.key)
+                  ) {
+                    roundIdx = i;
+                    break;
+                  }
+                }
+                const isLatest = roundIdx === roundsRef.current.length - 1;
+                return { ...prev, [obj.key]: isLatest };
+              });
               break;
             case "saved":
               // Server inserted/updated the model_responses row and is
@@ -1015,7 +1044,6 @@ export function CompareUI({
       seedContinue[modelKeyOf(m.provider, m.modelId)] = true;
     }
     setContinueByModelKey(seedContinue);
-    setUseInSynthesisByKey({});
 
     const model_ids = selectedModels.map((m) => ({
       provider: m.provider,
@@ -1036,6 +1064,9 @@ export function CompareUI({
       scores: null,
       responseId: null,
     }));
+    const seedSynthesis: Record<string, boolean> = {};
+    for (const r of initial) seedSynthesis[r.key] = true;
+    setUseInSynthesisByKey(seedSynthesis);
     const r0: CompareRound[] = [
       { prompt: effectivePrompt, responses: initial, kind: "main" },
     ];
@@ -1174,12 +1205,21 @@ export function CompareUI({
           roundsRef.current = next;
           setRounds(next);
 
-          // Default-include each successful response in Synthesis.
+          // Default-include successful responses in the latest round only.
           setUseInSynthesisByKey((prev) => {
             const out = { ...prev };
-            for (const r of nextRound.responses) {
-              if (r.status === "done" && !r.error && r.content.trim()) {
-                if (out[r.key] === undefined) out[r.key] = true;
+            const latestIdx = roundsRef.current.length - 1;
+            for (let i = 0; i < roundsRef.current.length; i++) {
+              if (i === latestIdx) continue;
+              for (const r of roundsRef.current[i]!.responses) {
+                if (out[r.key] === undefined) out[r.key] = false;
+              }
+            }
+            if (idx === latestIdx) {
+              for (const r of nextRound.responses) {
+                if (r.status === "done" && !r.error && r.content.trim()) {
+                  if (out[r.key] === undefined) out[r.key] = true;
+                }
               }
             }
             return out;
@@ -1498,6 +1538,14 @@ export function CompareUI({
       .flatMap((round) => round.responses)
       .find((row) => row.key === r.key);
     const mk = modelKeyOf(r.provider, r.model);
+    let roundIdx = -1;
+    for (let i = 0; i < roundsRef.current.length; i++) {
+      if (roundsRef.current[i]!.responses.some((row) => row.key === r.key)) {
+        roundIdx = i;
+        break;
+      }
+    }
+    const isLatestRound = roundIdx === roundsRef.current.length - 1;
     if (
       updated &&
       updated.status === "done" &&
@@ -1505,7 +1553,9 @@ export function CompareUI({
       updated.content.trim()
     ) {
       setContinueByModelKey((prev) => ({ ...prev, [mk]: true }));
-      setUseInSynthesisByKey((prev) => ({ ...prev, [r.key]: true }));
+      if (isLatestRound) {
+        setUseInSynthesisByKey((prev) => ({ ...prev, [r.key]: true }));
+      }
     } else {
       setContinueByModelKey((prev) => ({ ...prev, [mk]: false }));
       setUseInSynthesisByKey((prev) => ({ ...prev, [r.key]: false }));
@@ -1725,18 +1775,13 @@ export function CompareUI({
   // ─── Per-model derived state (Session 11) ───────────────────────────────
   //
   // The "Continue with this model" / "Ask this model" controls only make
-  // sense on ONE card per model — the latest one. Otherwise toggling on
-  // an older round would create a state that contradicts a newer card.
-  //
-  // We compute the latest *complete* card per model so transient
-  // streaming rows don't bounce the control between cards while a round
-  // is in flight.
+  // sense on ONE card per model — the latest one. Include in-flight lanes
+  // so checkboxes stay visible and stable during streaming.
   const latestKeyByModel = useMemo(() => {
     const map = new Map<string, string>();
     for (let i = rounds.length - 1; i >= 0; i--) {
       const round = rounds[i]!;
       for (const r of round.responses) {
-        if (r.status !== "done") continue;
         const mk = modelKeyOf(r.provider, r.model);
         if (!map.has(mk)) map.set(mk, r.key);
       }
@@ -1826,18 +1871,19 @@ export function CompareUI({
           ? () => continueModelToChat(r, promptForResponseKey(r.key))
           : undefined,
       continueInChatLabel: options?.continueInChatLabel,
-      useInSynthesis: isComplete
-        ? {
-            checked: useInSynthesisByKey[r.key] !== false,
-            onChange: (next) =>
-              setUseInSynthesisByKey((prev) => ({
-                ...prev,
-                [r.key]: next,
-              })),
-          }
-        : undefined,
+      useInSynthesis:
+        r.status !== "error"
+          ? {
+              checked: useInSynthesisByKey[r.key] !== false,
+              onChange: (next) =>
+                setUseInSynthesisByKey((prev) => ({
+                  ...prev,
+                  [r.key]: next,
+                })),
+            }
+          : undefined,
       continueWithModel:
-        isComplete && isLatestForModel
+        isLatestForModel && r.status !== "error"
           ? {
               checked: continueByModelKey[mk] !== false,
               onChange: (next) =>
@@ -2107,32 +2153,25 @@ export function CompareUI({
         files={attachedFiles}
         onChange={setAttachedFiles}
         disabled={phase === "streaming" || phase === "saving"}
-        showButton={false}
-      />
-      <div className="relative">
-        <FileAttachments
-          files={attachedFiles}
-          onChange={setAttachedFiles}
-          disabled={phase === "streaming" || phase === "saving"}
-          showChips={false}
-          className="absolute left-1 bottom-1 z-10"
-        />
+        dropZone
+        dropZoneHint="Drop files here or click to attach"
+      >
         <ClearableTextarea
           placeholder="Enter your prompt — it will run on every selected model in parallel…"
-          className="resize-none min-h-[100px] pl-10"
+          className="resize-none min-h-[100px] pl-10 border-0 bg-transparent focus-visible:ring-0 shadow-none"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onClear={() => setPrompt("")}
           disabled={phase === "streaming" || phase === "saving"}
         />
         {prompt.length > COMPARE_PROMPT_SOFT_CHAR_LIMIT && (
-          <p className="text-xs text-amber-600 dark:text-amber-500 mt-1.5">
+          <p className="text-xs text-amber-600 dark:text-amber-500 mt-1.5 px-3 pb-2">
             Long prompts may fail on some models (especially Groq). Consider
             shortening to under{" "}
             {COMPARE_PROMPT_SOFT_CHAR_LIMIT.toLocaleString()} characters.
           </p>
         )}
-      </div>
+      </FileAttachments>
 
       <div className="flex items-center gap-3 flex-wrap">
         <Button
