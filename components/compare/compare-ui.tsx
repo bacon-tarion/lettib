@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Loader2, Scale, Sparkles, Zap, Settings, ExternalLink } from "lucide-react";
+import { BarChart2, Loader2, Scale, Sparkles, Zap, Settings, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ClearableTextarea } from "@/components/ui/clearable-textarea";
 import {
@@ -2230,12 +2230,15 @@ export function CompareUI({
 
       {rounds.length > 0 && (
         <div className="space-y-8">
-          <p className="text-xs text-muted-foreground">
-            Scores (when available): <span className="font-medium">A</span>
-            ccuracy · <span className="font-medium">C</span>larity ·{" "}
-            <span className="font-medium">C</span>reativity ·{" "}
-            <span className="font-medium">U</span>sefulness ·{" "}
-            <span className="font-medium">R</span>isk (higher = more risk)
+          <p className="flex items-center gap-2 text-base text-primary whitespace-nowrap">
+            <BarChart2 className="h-4 w-4 shrink-0" aria-hidden />
+            <span>
+              Scores (when available): <span className="font-medium">A</span>
+              ccuracy · <span className="font-medium">C</span>larity ·{" "}
+              <span className="font-medium">C</span>reativity ·{" "}
+              <span className="font-medium">U</span>sefulness ·{" "}
+              <span className="font-medium">R</span>isk (higher = more risk)
+            </span>
           </p>
 
           {rounds.map((round, ri) => (
