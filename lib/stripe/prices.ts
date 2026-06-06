@@ -34,9 +34,24 @@ export const TIER_PRICES: Record<string, PaidTier> = {
 };
 
 export function priceIdToTier(priceId: string): PaidTier | null {
-  return TIER_PRICES[priceId] ?? null;
+  const prices = {
+    [process.env.STRIPE_PRICE_PRO_MONTHLY ?? "price_1TZQ1E421EGfXaTPadqVJdxD"]:
+      "pro" as PaidTier,
+    [process.env.STRIPE_PRICE_PRO_ANNUAL ?? "price_1TcSjX421EGfXaTPkFqKiJiw"]:
+      "pro" as PaidTier,
+    [process.env.STRIPE_PRICE_POWER_MONTHLY ?? "price_1TZQ2H421EGfXaTPYLch9oiY"]:
+      "power" as PaidTier,
+    [process.env.STRIPE_PRICE_POWER_ANNUAL ?? "price_1TcSlC421EGfXaTPjrvOAofN"]:
+      "power" as PaidTier,
+    [process.env.STRIPE_PRICE_LIFETIME ?? "price_1TZQ4V421EGfXaTPEVSWsRpk"]:
+      "lifetime_byok" as PaidTier,
+  };
+  return prices[priceId] ?? null;
 }
 
 export function isLifetimePriceId(priceId: string): boolean {
-  return priceId === PRICES.lifetime;
+  return (
+    priceId ===
+    (process.env.STRIPE_PRICE_LIFETIME ?? "price_1TZQ4V421EGfXaTPEVSWsRpk")
+  );
 }
