@@ -7,43 +7,30 @@ export const TIER_RANK: Record<string, number> = {
 
 export type PaidTier = "pro" | "power" | "lifetime_byok";
 
-const CANONICAL_PRICE_IDS = {
-  proMonthly: "price_1TZQ1E421EGfXaTPadqVJdxD",
-  proAnnual: "price_1TcSjX421EGfXaTPkFqKiJiw",
-  powerMonthly: "price_1TZQ2H421EGfXaTPYLch9oiY",
-  powerAnnual: "price_1TcSlC421EGfXaTPjrvOAofN",
-  lifetime: "price_1TZQ4V421EGfXaTPEVSWsRpk",
-} as const;
+export const PRICES = {
+  proMonthly:
+    process.env.STRIPE_PRICE_PRO_MONTHLY ?? "price_1TZQ1E421EGfXaTPadqVJdxD",
+  proAnnual:
+    process.env.STRIPE_PRICE_PRO_ANNUAL ?? "price_1TcSjX421EGfXaTPkFqKiJiw",
+  powerMonthly:
+    process.env.STRIPE_PRICE_POWER_MONTHLY ?? "price_1TZQ2H421EGfXaTPYLch9oiY",
+  powerAnnual:
+    process.env.STRIPE_PRICE_POWER_ANNUAL ?? "price_1TcSlC421EGfXaTPjrvOAofN",
+  lifetime:
+    process.env.STRIPE_PRICE_LIFETIME ?? "price_1TZQ4V421EGfXaTPEVSWsRpk",
+};
 
 export function getStripePriceIds() {
-  return {
-    proMonthly:
-      process.env.STRIPE_PRICE_PRO_MONTHLY?.trim() ||
-      CANONICAL_PRICE_IDS.proMonthly,
-    proAnnual:
-      process.env.STRIPE_PRICE_PRO_ANNUAL?.trim() ||
-      CANONICAL_PRICE_IDS.proAnnual,
-    powerMonthly:
-      process.env.STRIPE_PRICE_POWER_MONTHLY?.trim() ||
-      CANONICAL_PRICE_IDS.powerMonthly,
-    powerAnnual:
-      process.env.STRIPE_PRICE_POWER_ANNUAL?.trim() ||
-      CANONICAL_PRICE_IDS.powerAnnual,
-    lifetime:
-      process.env.STRIPE_PRICE_LIFETIME?.trim() ||
-      CANONICAL_PRICE_IDS.lifetime,
-  };
+  return PRICES;
 }
-
-const ids = getStripePriceIds();
 
 /** Maps Stripe price IDs to subscription tier. */
 export const TIER_PRICES: Record<string, PaidTier> = {
-  [ids.proMonthly]: "pro",
-  [ids.proAnnual]: "pro",
-  [ids.powerMonthly]: "power",
-  [ids.powerAnnual]: "power",
-  [ids.lifetime]: "lifetime_byok",
+  [PRICES.proMonthly]: "pro",
+  [PRICES.proAnnual]: "pro",
+  [PRICES.powerMonthly]: "power",
+  [PRICES.powerAnnual]: "power",
+  [PRICES.lifetime]: "lifetime_byok",
 };
 
 export function priceIdToTier(priceId: string): PaidTier | null {
@@ -51,5 +38,5 @@ export function priceIdToTier(priceId: string): PaidTier | null {
 }
 
 export function isLifetimePriceId(priceId: string): boolean {
-  return priceId === getStripePriceIds().lifetime;
+  return priceId === PRICES.lifetime;
 }
