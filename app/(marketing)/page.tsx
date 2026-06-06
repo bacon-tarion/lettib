@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PRICING_USD, COMPARE_MODELS_BY_PLAN } from "@/lib/pricing";
+import { getStripePriceIds } from "@/lib/stripe/prices";
 import { PricingCards } from "./pricing/pricing-cards";
 
 const PROBLEMS = [
@@ -98,6 +99,8 @@ const FAQ = [
 ];
 
 export default function LandingPage() {
+  const priceIds = getStripePriceIds();
+
   return (
     <div className="bg-background text-foreground">
       {/* Hero */}
@@ -246,7 +249,7 @@ export default function LandingPage() {
               Free forever with BYOK. Upgrade when you need more models and projects.
             </p>
           </div>
-          <PricingCards />
+          <PricingCards priceIds={priceIds} />
           <p className="text-center text-xs text-muted-foreground">
             All paid plans are BYOK — you pay AI providers directly. LettiB charges
             only for the workspace (${PRICING_USD.proMonthly}/mo Pro, $

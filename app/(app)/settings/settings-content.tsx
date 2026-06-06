@@ -63,11 +63,20 @@ const PROVIDERS: {
   },
 ];
 
+type StripePriceIds = {
+  proMonthly: string;
+  proAnnual: string;
+  powerMonthly: string;
+  powerAnnual: string;
+  lifetime: string;
+};
+
 interface SettingsContentProps {
   initialConnections: ApiConnection[];
   userEmail: string;
   userName: string;
   initialUsageAlertThresholdCents: number;
+  priceIds: StripePriceIds;
   subscriptionTier?: string;
   defaultTab?: string;
   showCheckoutSuccess?: boolean;
@@ -78,6 +87,7 @@ function SettingsContentInner({
   userEmail,
   userName,
   initialUsageAlertThresholdCents,
+  priceIds,
   subscriptionTier = "free",
   defaultTab = "api-keys",
   showCheckoutSuccess = false,
@@ -266,6 +276,7 @@ function SettingsContentInner({
 
         <TabsContent value="subscription" className="mt-4 space-y-4">
           <SubscriptionTab
+            priceIds={priceIds}
             subscriptionTier={subscriptionTier}
             showCheckoutSuccess={showCheckoutSuccess}
           />

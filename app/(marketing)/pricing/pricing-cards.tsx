@@ -9,11 +9,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PRICING_USD, COMPARE_MODELS_BY_PLAN } from "@/lib/pricing";
-import { getStripePriceIds } from "@/lib/stripe/prices";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
-const PRICES = getStripePriceIds();
+type StripePriceIds = {
+  proMonthly: string;
+  proAnnual: string;
+  powerMonthly: string;
+  powerAnnual: string;
+  lifetime: string;
+};
 
 type BillingInterval = "monthly" | "annual";
 
@@ -86,16 +91,17 @@ function isCheckoutPlan(plan: string): plan is CheckoutPlan {
 }
 
 function priceIdForCheckoutPlan(
+  priceIds: StripePriceIds,
   plan: CheckoutPlan,
   interval: BillingInterval
 ): string | null {
   if (plan === "pro") {
-    return interval === "annual" ? PRICES.proAnnual : PRICES.proMonthly;
+    return interval === "annual" ? priceIds.proAnnual : priceIds.proMonthly;
   }
   if (plan === "power") {
-    return interval === "annual" ? PRICES.powerAnnual : PRICES.powerMonthly;
+    return interval === "annual" ? priceIds.powerAnnual : priceIds.powerMonthly;
   }
-  return PRICES.lifetime;
+  return priceIds.lifetime;
 }
 
 function IntervalToggle({
@@ -135,7 +141,7 @@ function IntervalToggle({
   );
 }
 
-function PricingCardsInner() {
+function PricingCardsInner({ priceIds }: { priceIds: StripePriceIds }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [interval, setInterval] = useState<BillingInterval>("monthly");
@@ -226,12 +232,12 @@ function PricingCardsInner() {
 
   function priceIdForTier(key: string): string | null {
     if (key === "pro") {
-      return interval === "annual" ? PRICES.proAnnual : PRICES.proMonthly;
+      return interval === "annual" ? priceIds.proAnnual : priceIds.proMonthly;
     }
     if (key === "power") {
-      return interval === "annual" ? PRICES.powerAnnual : PRICES.powerMonthly;
+      return interval === "annual" ? priceIds.powerAnnual : priceIds.powerMonthly;
     }
-    if (key === "lifetime") return PRICES.lifetime;
+    if (key === "lifetime") return priceIds.lifetime;
     return null;
   }
 
@@ -244,7 +250,7 @@ function PricingCardsInner() {
       return;
     }
 
-    const priceId = priceIdForCheckoutPlan(plan, interval);
+    const priceId = priceIdForCheckoutPlan(priceIds, plan, interval);
     if (!priceId) {
       return;
     }
@@ -279,7 +285,7 @@ function PricingCardsInner() {
         router.replace("/pricing");
       }
     })();
-  }, [searchParams, isLoggedIn, interval, router]);
+  }, [searchParams, isLoggedIn, interval, router, priceIds]);
 
   return (
     <div className="space-y-6">
@@ -411,7 +417,7 @@ function PricingCardsInner() {
   );
 }
 
-export function PricingCards() {
+export function PricingCards({ priceIds }: { priceIds: StripePriceIds }) {
   return (
     <Suspense
       fallback={
@@ -420,7 +426,7 @@ export function PricingCards() {
         </div>
       }
     >
-      <PricingCardsInner />
+      <PricingCardsInner priceIds={priceIds} />
     </Suspense>
   );
 }

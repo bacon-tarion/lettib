@@ -3,6 +3,7 @@ import { PricingCards } from "./pricing-cards";
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
 import { PRICING_USD } from "@/lib/pricing";
+import { getStripePriceIds } from "@/lib/stripe/prices";
 
 export const metadata = {
   title: "Pricing — LettiB",
@@ -10,6 +11,8 @@ export const metadata = {
 };
 
 export default function PricingPage() {
+  const priceIds = getStripePriceIds();
+
   return (
     <div className="bg-background text-foreground min-h-screen">
       <section className="border-b border-border">
@@ -25,7 +28,7 @@ export default function PricingPage() {
 
       <section>
         <div className="mx-auto max-w-6xl px-4 py-16">
-          <PricingCards />
+          <PricingCards priceIds={priceIds} />
           <p className="mt-8 text-center text-xs text-muted-foreground">
             All plans require your own provider API keys (OpenAI, Anthropic,
             Google, xAI (Grok)). You&apos;re billed by the providers for their

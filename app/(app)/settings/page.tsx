@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getStripePriceIds } from "@/lib/stripe/prices";
 import { getUserSubscription } from "@/lib/subscription/tier";
 import { listApiKeys, getUsageAlertThresholdCents } from "./actions";
 import { SettingsContent } from "./settings-content";
@@ -28,6 +29,7 @@ export default async function SettingsPage({
     (user.user_metadata?.display_name as string | undefined) ??
     user.email?.split("@")[0] ??
     "User";
+  const priceIds = getStripePriceIds();
 
   return (
     <SettingsContent
@@ -35,6 +37,7 @@ export default async function SettingsPage({
       userEmail={userEmail}
       userName={userName}
       initialUsageAlertThresholdCents={thresholdCents}
+      priceIds={priceIds}
       subscriptionTier={subscription.tier}
       defaultTab={
         searchParams?.tab === "subscription" ? "subscription" : undefined

@@ -7,10 +7,15 @@ import { Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { getStripePriceIds } from "@/lib/stripe/prices";
 import { tierDisplayName } from "@/lib/subscription/tier";
 
-const PRICES = getStripePriceIds();
+type StripePriceIds = {
+  proMonthly: string;
+  proAnnual: string;
+  powerMonthly: string;
+  powerAnnual: string;
+  lifetime: string;
+};
 
 type BillingInterval = "monthly" | "annual";
 
@@ -97,9 +102,11 @@ function IntervalToggle({
 }
 
 export function SubscriptionTab({
+  priceIds,
   subscriptionTier = "free",
   showCheckoutSuccess = false,
 }: {
+  priceIds: StripePriceIds;
   subscriptionTier?: string;
   showCheckoutSuccess?: boolean;
 }) {
@@ -158,9 +165,9 @@ export function SubscriptionTab({
   const isLifetime = subscriptionTier === "lifetime_byok";
 
   const proPriceId =
-    interval === "annual" ? PRICES.proAnnual : PRICES.proMonthly;
+    interval === "annual" ? priceIds.proAnnual : priceIds.proMonthly;
   const powerPriceId =
-    interval === "annual" ? PRICES.powerAnnual : PRICES.powerMonthly;
+    interval === "annual" ? priceIds.powerAnnual : priceIds.powerMonthly;
 
   return (
     <div className="space-y-4">
@@ -207,7 +214,7 @@ export function SubscriptionTab({
             <Button
               variant="secondary"
               disabled={loadingKey !== null}
-              onClick={() => void handleCheckout(PRICES.lifetime, "lifetime")}
+              onClick={() => void handleCheckout(priceIds.lifetime, "lifetime")}
             >
               {loadingKey === "lifetime" && (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -237,7 +244,7 @@ export function SubscriptionTab({
             <Button
               variant="secondary"
               disabled={loadingKey !== null}
-              onClick={() => void handleCheckout(PRICES.lifetime, "lifetime")}
+              onClick={() => void handleCheckout(priceIds.lifetime, "lifetime")}
             >
               {loadingKey === "lifetime" && (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -263,7 +270,7 @@ export function SubscriptionTab({
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={loadingKey !== null}
-              onClick={() => void handleCheckout(PRICES.lifetime, "lifetime")}
+              onClick={() => void handleCheckout(priceIds.lifetime, "lifetime")}
             >
               {loadingKey === "lifetime" && (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
