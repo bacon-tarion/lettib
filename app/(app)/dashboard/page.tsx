@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { MessageSquare, GitCompare, FolderPlus, Sparkles } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { OnboardingBanner } from "@/components/onboarding/onboarding-banner";
 import { ProjectCard } from "@/components/projects/project-card";
 import { createClient } from "@/lib/supabase/server";
 import { listTeams } from "@/app/(app)/teams/actions";
@@ -43,6 +44,36 @@ export default async function DashboardPage() {
     user.email?.split("@")[0] ??
     "there";
 
+  const { data: profileRow } = await supabase
+    .from("profiles")
+    .select("onboarding_dismissed")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  const onboardingDismissed =
+    (profileRow as { onboarding_dismissed?: boolean } | null)
+      ?.onboarding_dismissed ?? false;
+
+  let hasApiKey = false;
+  let hasRunCompare = false;
+
+  if (!onboardingDismissed) {
+    const [{ count: apiKeyCount }, { count: compareCount }] = await Promise.all([
+      supabase
+        .from("api_connections")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .in("status", ["connected", "untested"]),
+      supabase
+        .from("conversations")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .eq("mode", "compare"),
+    ]);
+    hasApiKey = (apiKeyCount ?? 0) > 0;
+    hasRunCompare = (compareCount ?? 0) > 0;
+  }
+
   const [{ data: pinnedData }, recentActivity, snapshot, teams] = await Promise.all([
     supabase
       .from("projects")
@@ -69,6 +100,11 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-8 max-w-6xl">
+      <OnboardingBanner
+        hasApiKey={hasApiKey}
+        hasRunCompare={hasRunCompare}
+        dismissed={onboardingDismissed}
+      />
       <div>
         <h1 className="text-2xl font-bold">Welcome back, {displayName}.</h1>
         <p className="text-muted-foreground text-sm mt-1">
