@@ -24,7 +24,7 @@ export async function GET() {
     );
   }
 
-  const status = await fetchOnboardingStatus(supabase, user.id);
+  const status = await fetchOnboardingStatus(user.id);
 
   return NextResponse.json(status, { headers: NO_CACHE_HEADERS });
 }

@@ -58,7 +58,9 @@ export function OnboardingBanner({
           credentials: "same-origin",
         });
         if (!res.ok) return;
-        const parsed = parseOnboardingStatusPayload(await res.json());
+        const json: unknown = await res.json();
+        console.log("[onboarding] status response:", JSON.stringify(json));
+        const parsed = parseOnboardingStatusPayload(json);
         if (!parsed || cancelled) return;
         applyStatus(parsed);
       } catch (err) {

@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { createServiceClient } from "@/lib/supabase/service";
 
 export type OnboardingStatus = {
   hasApiKey: boolean;
@@ -6,11 +6,19 @@ export type OnboardingStatus = {
   dismissed: boolean;
 };
 
+const ACTIVE_API_KEY_STATUSES = ["connected", "untested"] as const;
+
+/**
+ * Load onboarding checklist state for a user. Uses the service-role client
+ * (same as listApiKeys) so api_connections rows are visible even when RLS
+ * SELECT policies are missing or misconfigured on the user-scoped client.
+ */
 export async function fetchOnboardingStatus(
-  supabase: SupabaseClient,
   userId: string
 ): Promise<OnboardingStatus> {
-  const { data: profileRow, error: profileError } = await supabase
+  const serviceClient = createServiceClient();
+
+  const { data: profileRow, error: profileError } = await serviceClient
     .from("profiles")
     .select("onboarding_dismissed")
     .eq("id", userId)
@@ -29,30 +37,32 @@ export async function fetchOnboardingStatus(
 
   if (!dismissed) {
     const [apiKeyResult, compareResult] = await Promise.all([
-      supabase
+      serviceClient
         .from("api_connections")
-        .select("id", { count: "exact", head: true })
+        .select("id")
         .eq("user_id", userId)
-        .in("status", ["connected", "untested"]),
-      supabase
+        .in("status", [...ACTIVE_API_KEY_STATUSES])
+        .limit(1),
+      serviceClient
         .from("conversations")
-        .select("id", { count: "exact", head: true })
+        .select("id")
         .eq("user_id", userId)
-        .eq("mode", "compare"),
+        .eq("mode", "compare")
+        .limit(1),
     ]);
 
     if (apiKeyResult.error) {
       console.error(
-        "[onboarding] api_connections count failed:",
+        "[onboarding] api_connections query failed:",
         apiKeyResult.error
       );
     }
     if (compareResult.error) {
-      console.error("[onboarding] compare count failed:", compareResult.error);
+      console.error("[onboarding] compare query failed:", compareResult.error);
     }
 
-    hasApiKey = (apiKeyResult.count ?? 0) > 0;
-    hasRunCompare = (compareResult.count ?? 0) > 0;
+    hasApiKey = (apiKeyResult.data?.length ?? 0) > 0;
+    hasRunCompare = (compareResult.data?.length ?? 0) > 0;
   }
 
   return { hasApiKey, hasRunCompare, dismissed };

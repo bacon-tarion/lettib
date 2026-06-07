@@ -51,7 +51,7 @@ export default async function DashboardPage() {
     hasApiKey,
     hasRunCompare,
     dismissed: onboardingDismissed,
-  } = await fetchOnboardingStatus(supabase, user.id);
+  } = await fetchOnboardingStatus(user.id);
 
   const [{ data: pinnedData }, recentActivity, snapshot, teams] = await Promise.all([
     supabase

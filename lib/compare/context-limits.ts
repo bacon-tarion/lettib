@@ -3,8 +3,6 @@ import { MODELS_CATALOG } from "@/lib/providers/models";
 /** Soft UI warning when the compare prompt exceeds this length (characters). */
 export const COMPARE_PROMPT_SOFT_CHAR_LIMIT = 4000;
 
-const GROQ_MAX_TOTAL_TOKENS = 8000;
-const GROQ_MAX_HISTORY_TOKENS = 4000;
 const GROQ_COMPOUND_MAX_TOTAL_TOKENS = 4000;
 const GROQ_COMPOUND_MAX_HISTORY_TOKENS = 2000;
 
@@ -14,19 +12,37 @@ export const GROQ_COMPOUND_MODEL_IDS = [
   "groq/compound-mini",
 ] as const;
 
+const GROQ_MODEL_TOKEN_LIMITS: Record<
+  string,
+  { maxTotalTokens: number; maxHistoryTokens: number }
+> = {
+  "llama-3.3-70b-versatile": {
+    maxTotalTokens: 4000,
+    maxHistoryTokens: 2000,
+  },
+  "llama-3.1-8b-instant": {
+    maxTotalTokens: 2000,
+    maxHistoryTokens: 1000,
+  },
+};
+
 function groqCompareTokenLimits(model: string): {
   maxTotalTokens: number;
   maxHistoryTokens: number;
 } {
+  const configured = GROQ_MODEL_TOKEN_LIMITS[model];
+  if (configured) return configured;
+
   if (GROQ_COMPOUND_MODEL_IDS.includes(model as (typeof GROQ_COMPOUND_MODEL_IDS)[number])) {
     return {
       maxTotalTokens: GROQ_COMPOUND_MAX_TOTAL_TOKENS,
       maxHistoryTokens: GROQ_COMPOUND_MAX_HISTORY_TOKENS,
     };
   }
+
   return {
-    maxTotalTokens: GROQ_MAX_TOTAL_TOKENS,
-    maxHistoryTokens: GROQ_MAX_HISTORY_TOKENS,
+    maxTotalTokens: 4000,
+    maxHistoryTokens: 2000,
   };
 }
 
@@ -79,6 +95,8 @@ export function fitGroqComparePayload(
     return { userContent, systemPrompt, truncated: false };
   }
 
+  console.log(`[groq] truncating to ${maxTotalTokens} tokens (model: ${model})`);
+
   const sepIdx = userContent.indexOf(FOLLOW_UP_HISTORY_SEP);
   if (sepIdx !== -1) {
     const recap = userContent.slice(0, sepIdx);
@@ -115,7 +133,9 @@ export function fitGroqComparePayload(
   }
 
   if (truncated) {
-    console.warn("[compare] truncated context for Groq");
+    console.warn(
+      `[groq] truncated context for ${model} (~${totalTokens()} est. tokens, budget ${maxTotalTokens})`
+    );
   }
 
   return { userContent, systemPrompt, truncated };
