@@ -8,10 +8,17 @@
  * also accepts final `message.content` chunks that the SDK schema drops.
  */
 
+import {
+  GROQ_CHAT_COMPLETIONS_URL,
+  groqFetch,
+} from "@/lib/providers/groq-retry";
+
 export type GroqCompoundUsage = {
   inputTokens: number;
   outputTokens: number;
 };
+
+type GroqChatMessage = { role: string; content: string };
 
 function extractTextFromChoice(choice: unknown): string {
   if (!choice || typeof choice !== "object") return "";
@@ -46,23 +53,16 @@ function extractUsage(payload: unknown): GroqCompoundUsage | null {
 }
 
 /**
- * Stream a Groq Compound completion, invoking `onText` for every prose
- * fragment observed in the SSE feed.
+ * Stream an OpenAI-compatible Groq chat completion via direct HTTP (with
+ * transient retry on the initial request). Invokes `onText` for each delta.
  */
-export async function streamGroqCompoundText(input: {
+export async function streamGroqOpenAIMessages(input: {
   apiKey: string;
   model: string;
-  userContent: string;
-  systemPrompt?: string;
+  messages: GroqChatMessage[];
   onText: (text: string) => void;
 }): Promise<GroqCompoundUsage> {
-  const messages: { role: string; content: string }[] = [];
-  if (input.systemPrompt?.trim()) {
-    messages.push({ role: "system", content: input.systemPrompt.trim() });
-  }
-  messages.push({ role: "user", content: input.userContent });
-
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const res = await groqFetch(GROQ_CHAT_COMPLETIONS_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -70,7 +70,7 @@ export async function streamGroqCompoundText(input: {
     },
     body: JSON.stringify({
       model: input.model,
-      messages,
+      messages: input.messages,
       stream: true,
     }),
   });
@@ -105,8 +105,6 @@ export async function streamGroqCompoundText(input: {
     for (const choice of p.choices ?? []) {
       const chunk = extractTextFromChoice(choice);
       if (!chunk) continue;
-      // Some Compound streams repeat the full message in a terminal chunk;
-      // only forward the net-new suffix.
       let delta = chunk;
       if (chunk.startsWith(accumulated)) {
         delta = chunk.slice(accumulated.length);
@@ -142,6 +140,42 @@ export async function streamGroqCompoundText(input: {
     }
   }
 
+  return { inputTokens, outputTokens };
+}
+
+/**
+ * Stream a Groq Compound completion, invoking `onText` for every prose
+ * fragment observed in the SSE feed.
+ */
+export async function streamGroqCompoundText(input: {
+  apiKey: string;
+  model: string;
+  userContent: string;
+  systemPrompt?: string;
+  onText: (text: string) => void;
+}): Promise<GroqCompoundUsage> {
+  const messages: GroqChatMessage[] = [];
+  if (input.systemPrompt?.trim()) {
+    messages.push({ role: "system", content: input.systemPrompt.trim() });
+  }
+  messages.push({ role: "user", content: input.userContent });
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let accumulated = "";
+
+  const usage = await streamGroqOpenAIMessages({
+    apiKey: input.apiKey,
+    model: input.model,
+    messages,
+    onText: (chunk) => {
+      accumulated += chunk;
+      input.onText(chunk);
+    },
+  });
+  inputTokens = usage.inputTokens;
+  outputTokens = usage.outputTokens;
+
   // Last-resort: non-stream retry when the agent ran tools but never streamed
   // prose (observed on multi-tool Compound requests).
   if (!accumulated.trim()) {
@@ -169,13 +203,13 @@ export async function generateGroqCompoundText(input: {
   userContent: string;
   systemPrompt?: string;
 }): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
-  const messages: { role: string; content: string }[] = [];
+  const messages: GroqChatMessage[] = [];
   if (input.systemPrompt?.trim()) {
     messages.push({ role: "system", content: input.systemPrompt.trim() });
   }
   messages.push({ role: "user", content: input.userContent });
 
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const res = await groqFetch(GROQ_CHAT_COMPLETIONS_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -213,4 +247,44 @@ export async function generateGroqCompoundText(input: {
 
 export function isGroqCompoundModel(model: string): boolean {
   return model === "groq/compound";
+}
+
+/** AI SDK–compatible data stream for Groq chat (text-only messages). */
+export function streamGroqChatDataStreamResponse(input: {
+  apiKey: string;
+  model: string;
+  messages: GroqChatMessage[];
+  headers?: Record<string, string>;
+  onFinish?: (usage: GroqCompoundUsage) => void;
+}): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const usage = await streamGroqOpenAIMessages({
+          apiKey: input.apiKey,
+          model: input.model,
+          messages: input.messages,
+          onText: (chunk) => {
+            controller.enqueue(encoder.encode(`0:${JSON.stringify(chunk)}\n`));
+          },
+        });
+        input.onFinish?.(usage);
+        controller.enqueue(
+          encoder.encode(`d:${JSON.stringify({ finishReason: "stop" })}\n`)
+        );
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Vercel-AI-Data-Stream": "v1",
+      ...input.headers,
+    },
+  });
 }

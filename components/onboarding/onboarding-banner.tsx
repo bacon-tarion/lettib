@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, Circle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,14 +17,66 @@ type Step = {
   href?: string;
 };
 
+type OnboardingStatus = {
+  hasApiKey: boolean;
+  hasRunCompare: boolean;
+  dismissed: boolean;
+};
+
 export function OnboardingBanner({
   hasApiKey,
   hasRunCompare,
   dismissed,
 }: OnboardingBannerProps) {
+  const [status, setStatus] = useState<OnboardingStatus>({
+    hasApiKey,
+    hasRunCompare,
+    dismissed,
+  });
   const [hidden, setHidden] = useState(false);
 
-  if (dismissed || hidden || (hasApiKey && hasRunCompare)) {
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refreshStatus() {
+      try {
+        const res = await fetch("/api/onboarding/status", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as OnboardingStatus;
+        if (cancelled) return;
+        setStatus(data);
+      } catch (err) {
+        console.error("[onboarding] status refresh failed:", err);
+      }
+    }
+
+    void refreshStatus();
+
+    function onFocus() {
+      void refreshStatus();
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void refreshStatus();
+      }
+    }
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+
+  if (
+    status.dismissed ||
+    hidden ||
+    (status.hasApiKey && status.hasRunCompare)
+  ) {
     return null;
   }
 
@@ -32,12 +84,12 @@ export function OnboardingBanner({
     { label: "Create your account", complete: true },
     {
       label: "Add an API key",
-      complete: hasApiKey,
+      complete: status.hasApiKey,
       href: "/settings?tab=api-keys",
     },
     {
       label: "Run your first compare",
-      complete: hasRunCompare,
+      complete: status.hasRunCompare,
       href: "/compare",
     },
   ];

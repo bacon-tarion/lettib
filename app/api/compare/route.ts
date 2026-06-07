@@ -17,6 +17,7 @@ import {
   isGroqCompoundModel,
   streamGroqCompoundText,
 } from "@/lib/providers/groq-compound";
+import { streamGroqTextCollecting } from "@/lib/providers/groq-retry";
 import {
   humanizeCompareLaneError,
   prepareComparePayloadForProvider,
@@ -918,6 +919,19 @@ export async function POST(req: NextRequest) {
             });
             tokensIn = usage.inputTokens;
             tokensOut = usage.outputTokens;
+          } else if (spec.provider === "groq") {
+            const usage = await streamGroqTextCollecting({
+              apiKey,
+              model: spec.model,
+              messages: [{ role: "user", content: laneUserContent }],
+              systemPrompt: laneSystemPrompt || undefined,
+              onChunk: (chunk) => {
+                accumulated += chunk;
+                enqueue({ type: "chunk", key, text: chunk });
+              },
+            });
+            tokensIn = usage.inputTokens;
+            tokensOut = usage.outputTokens;
           } else {
             const result = await streamChat({
               provider: spec.provider as
@@ -925,7 +939,6 @@ export async function POST(req: NextRequest) {
                 | "anthropic"
                 | "google"
                 | "xai"
-                | "groq"
                 | "custom",
               model: spec.model,
               apiKey,
