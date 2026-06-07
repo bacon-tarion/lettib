@@ -276,107 +276,102 @@ async function streamGroqHttp(
   config: StreamGroqResponseConfig,
   truncated: { messages: CoreMessage[]; systemPrompt?: string }
 ): Promise<void> {
-  const runOnce = async () => {
-    const messages = buildGroqApiMessages(truncated);
-    const res = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages,
-        stream: true,
-      }),
-    });
+  const messages = buildGroqApiMessages(truncated);
 
-    if (!res.ok) {
-      const details = await res.text().catch(() => "");
-      throw new Error(
-        details || `Groq stream failed with status ${res.status}`
-      );
-    }
-    if (!res.body) throw new Error("Groq stream response had no body");
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let accumulated = "";
-    let promptTokens = 0;
-    let completionTokens = 0;
-
-    const handlePayload = (payload: unknown) => {
-      if (!payload || typeof payload !== "object") return;
-      const p = payload as {
-        error?: { message?: string };
-        choices?: unknown[];
-      };
-      if (p.error?.message) throw new Error(p.error.message);
-
-      const usage = extractCompoundUsage(payload);
-      if (usage) {
-        promptTokens = usage.promptTokens;
-        completionTokens = usage.completionTokens;
-      }
-
-      for (const choice of p.choices ?? []) {
-        const chunk = extractCompoundChoiceText(choice);
-        if (!chunk) continue;
-        let delta = chunk;
-        if (chunk.startsWith(accumulated)) {
-          delta = chunk.slice(accumulated.length);
-        }
-        if (delta) {
-          accumulated += delta;
-          config.onChunk(delta);
-        }
-      }
-    };
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice(5).trim();
-        if (!data || data === "[DONE]") continue;
-        handlePayload(JSON.parse(data));
-      }
-    }
-
-    buffer += decoder.decode();
-    const tail = buffer.trim();
-    if (tail.startsWith("data:")) {
-      const data = tail.slice(5).trim();
-      if (data && data !== "[DONE]") {
-        handlePayload(JSON.parse(data));
-      }
-    }
-
-    config.onFinish?.({ promptTokens, completionTokens });
-  };
-
-  try {
-    await runOnce();
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.log(
-      "[groq] attempt 1 failed:",
-      errorMessage,
-      "retrying in 1500ms..."
-    );
-    await sleep(1500);
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      await runOnce();
-      console.log("[groq] attempt 2: success");
-    } catch (retryErr) {
-      console.log("[groq] attempt 2: fail");
-      throw retryErr;
+      const res = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages,
+          stream: true,
+        }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`Groq HTTP ${res.status}: ${errText}`);
+      }
+      if (!res.body) throw new Error("Groq stream response had no body");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulated = "";
+      let promptTokens = 0;
+      let completionTokens = 0;
+
+      const handlePayload = (payload: unknown) => {
+        if (!payload || typeof payload !== "object") return;
+        const p = payload as {
+          error?: { message?: string };
+          choices?: unknown[];
+        };
+        if (p.error?.message) throw new Error(p.error.message);
+
+        const usage = extractCompoundUsage(payload);
+        if (usage) {
+          promptTokens = usage.promptTokens;
+          completionTokens = usage.completionTokens;
+        }
+
+        for (const choice of p.choices ?? []) {
+          const chunk = extractCompoundChoiceText(choice);
+          if (!chunk) continue;
+          let delta = chunk;
+          if (chunk.startsWith(accumulated)) {
+            delta = chunk.slice(accumulated.length);
+          }
+          if (delta) {
+            accumulated += delta;
+            config.onChunk(delta);
+          }
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const data = trimmed.slice(5).trim();
+          if (!data || data === "[DONE]") continue;
+          handlePayload(JSON.parse(data));
+        }
+      }
+
+      buffer += decoder.decode();
+      const tail = buffer.trim();
+      if (tail.startsWith("data:")) {
+        const data = tail.slice(5).trim();
+        if (data && data !== "[DONE]") {
+          handlePayload(JSON.parse(data));
+        }
+      }
+
+      config.onFinish?.({ promptTokens, completionTokens });
+      return;
+    } catch (err) {
+      if (attempt === 1) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(
+          "[groq] attempt 1 failed:",
+          message,
+          "— retrying in 1500ms"
+        );
+        await sleep(1500);
+        continue;
+      }
+      throw err;
     }
   }
 }
