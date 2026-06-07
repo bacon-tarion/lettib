@@ -21,6 +21,7 @@ import { streamGroqTextCollecting } from "@/lib/providers/groq-retry";
 import {
   humanizeCompareLaneError,
   prepareComparePayloadForProvider,
+  resolveGroqCompareLaneModel,
 } from "@/lib/compare/context-limits";
 
 export const runtime = "nodejs";
@@ -810,14 +811,25 @@ export async function POST(req: NextRequest) {
           userContent = `${recap}\n\n---\n\nNew question:\n${prompt}`;
         }
 
+        const groqLaneModel =
+          spec.provider === "groq"
+            ? resolveGroqCompareLaneModel(spec.model, webSearchEnabled)
+            : spec.model;
+
         const prepared = prepareComparePayloadForProvider(
           spec.provider,
-          spec.model,
+          spec.provider === "groq" ? groqLaneModel : spec.model,
           userContent,
           systemPrompt
         );
         const laneUserContent = prepared.userContent;
         const laneSystemPrompt = prepared.systemPrompt;
+
+        if (spec.provider === "groq") {
+          console.log(
+            `[groq] lane payload prepared for ${groqLaneModel}: user=${laneUserContent.length} chars system=${laneSystemPrompt.length} chars`
+          );
+        }
 
         let apiKey: string | null = null;
         let baseUrl: string | null = null;
@@ -900,16 +912,11 @@ export async function POST(req: NextRequest) {
             tokensOut = usage.outputTokens;
           } else if (
             spec.provider === "groq" &&
-            (isGroqCompoundModel(spec.model) ||
-              (webSearchEnabled && spec.provider === "groq"))
+            (isGroqCompoundModel(groqLaneModel) || webSearchEnabled)
           ) {
-            const compoundModel =
-              webSearchEnabled && !isGroqCompoundModel(spec.model)
-                ? "groq/compound"
-                : spec.model;
             const usage = await streamGroqCompoundText({
               apiKey,
-              model: compoundModel,
+              model: groqLaneModel,
               userContent: laneUserContent,
               systemPrompt: laneSystemPrompt || undefined,
               onText: (chunk) => {
@@ -922,7 +929,7 @@ export async function POST(req: NextRequest) {
           } else if (spec.provider === "groq") {
             const usage = await streamGroqTextCollecting({
               apiKey,
-              model: spec.model,
+              model: groqLaneModel,
               messages: [{ role: "user", content: laneUserContent }],
               systemPrompt: laneSystemPrompt || undefined,
               onChunk: (chunk) => {

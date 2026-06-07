@@ -1,4 +1,5 @@
 import { MODELS_CATALOG } from "@/lib/providers/models";
+import { isGroqCompoundModel } from "@/lib/providers/groq-compound";
 
 /** Soft UI warning when the compare prompt exceeds this length (characters). */
 export const COMPARE_PROMPT_SOFT_CHAR_LIMIT = 4000;
@@ -26,6 +27,12 @@ const GROQ_MODEL_TOKEN_LIMITS: Record<
   },
 };
 
+/**
+ * Groq tokenizes denser than chars/4 — use a conservative ratio so truncation
+ * runs before Groq returns 413 / "too many tokens".
+ */
+const GROQ_CHARS_PER_TOKEN = 2;
+
 function groqCompareTokenLimits(model: string): {
   maxTotalTokens: number;
   maxHistoryTokens: number;
@@ -33,7 +40,11 @@ function groqCompareTokenLimits(model: string): {
   const configured = GROQ_MODEL_TOKEN_LIMITS[model];
   if (configured) return configured;
 
-  if (GROQ_COMPOUND_MODEL_IDS.includes(model as (typeof GROQ_COMPOUND_MODEL_IDS)[number])) {
+  if (
+    GROQ_COMPOUND_MODEL_IDS.includes(
+      model as (typeof GROQ_COMPOUND_MODEL_IDS)[number]
+    )
+  ) {
     return {
       maxTotalTokens: GROQ_COMPOUND_MAX_TOTAL_TOKENS,
       maxHistoryTokens: GROQ_COMPOUND_MAX_HISTORY_TOKENS,
@@ -46,24 +57,49 @@ function groqCompareTokenLimits(model: string): {
   };
 }
 
+/** Model id actually sent to Groq (web search upgrades Llama lanes to Compound). */
+export function resolveGroqCompareLaneModel(
+  model: string,
+  webSearchEnabled: boolean
+): string {
+  if (webSearchEnabled && !isGroqCompoundModel(model)) {
+    return "groq/compound";
+  }
+  return model;
+}
+
 const FOLLOW_UP_HISTORY_SEP = "\n\n---\n\nNew question:\n";
 
-/** Rough token estimate (~4 chars per token). */
+/** Rough token estimate (~4 chars per token) for non-Groq providers. */
 export function estimateTextTokens(text: string): number {
   if (!text) return 0;
   return Math.ceil(text.length / 4);
 }
 
+function estimateGroqTokens(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / GROQ_CHARS_PER_TOKEN);
+}
+
+function groqMaxChars(maxTotalTokens: number): number {
+  return maxTotalTokens * GROQ_CHARS_PER_TOKEN;
+}
+
 /** Keep the tail of `text` within an approximate token budget. */
-function truncateTextToTokenBudgetFromEnd(
+function truncateTextToCharBudgetFromEnd(
+  text: string,
+  maxChars: number
+): string {
+  if (!text || maxChars <= 0) return "";
+  if (text.length <= maxChars) return text;
+  return text.slice(text.length - maxChars);
+}
+
+function truncateTextToGroqTokenBudgetFromEnd(
   text: string,
   maxTokens: number
 ): string {
-  if (!text || maxTokens <= 0) return "";
-  if (estimateTextTokens(text) <= maxTokens) return text;
-  const maxChars = maxTokens * 4;
-  if (text.length <= maxChars) return text;
-  return text.slice(text.length - maxChars);
+  return truncateTextToCharBudgetFromEnd(text, groqMaxChars(maxTokens));
 }
 
 export type ComparePayload = {
@@ -87,11 +123,20 @@ export function fitGroqComparePayload(
   let systemPrompt = input.systemPrompt;
   let truncated = false;
   const { maxTotalTokens, maxHistoryTokens } = groqCompareTokenLimits(model);
+  const maxChars = groqMaxChars(maxTotalTokens);
 
-  const totalTokens = () =>
-    estimateTextTokens(userContent) + estimateTextTokens(systemPrompt);
+  const payloadChars = () => userContent.length + systemPrompt.length;
+  const payloadTokens = () =>
+    estimateGroqTokens(userContent) + estimateGroqTokens(systemPrompt);
 
-  if (totalTokens() <= maxTotalTokens) {
+  console.log(
+    `[groq] payload size before truncation: ${payloadChars()} chars (model: ${model}, budget: ${maxTotalTokens} tokens / ${maxChars} chars)`
+  );
+
+  const needsTruncation =
+    payloadChars() > maxChars || payloadTokens() > maxTotalTokens;
+
+  if (!needsTruncation) {
     return { userContent, systemPrompt, truncated: false };
   }
 
@@ -101,7 +146,7 @@ export function fitGroqComparePayload(
   if (sepIdx !== -1) {
     const recap = userContent.slice(0, sepIdx);
     const suffix = userContent.slice(sepIdx);
-    const trimmedRecap = truncateTextToTokenBudgetFromEnd(
+    const trimmedRecap = truncateTextToGroqTokenBudgetFromEnd(
       recap,
       maxHistoryTokens
     );
@@ -109,12 +154,12 @@ export function fitGroqComparePayload(
     userContent = trimmedRecap + suffix;
   }
 
-  if (totalTokens() > maxTotalTokens && systemPrompt) {
+  if (payloadTokens() > maxTotalTokens && systemPrompt) {
     const systemBudget = Math.max(
       0,
-      maxTotalTokens - estimateTextTokens(userContent)
+      maxTotalTokens - estimateGroqTokens(userContent)
     );
-    const trimmedSystem = truncateTextToTokenBudgetFromEnd(
+    const trimmedSystem = truncateTextToGroqTokenBudgetFromEnd(
       systemPrompt,
       systemBudget
     );
@@ -122,19 +167,33 @@ export function fitGroqComparePayload(
     systemPrompt = trimmedSystem;
   }
 
-  if (totalTokens() > maxTotalTokens) {
+  if (payloadTokens() > maxTotalTokens) {
     const userBudget = Math.max(
       0,
-      maxTotalTokens - estimateTextTokens(systemPrompt)
+      maxTotalTokens - estimateGroqTokens(systemPrompt)
     );
-    const trimmedUser = truncateTextToTokenBudgetFromEnd(userContent, userBudget);
+    const trimmedUser = truncateTextToGroqTokenBudgetFromEnd(
+      userContent,
+      userBudget
+    );
+    if (trimmedUser !== userContent) truncated = true;
+    userContent = trimmedUser;
+  }
+
+  // Hard char ceiling — Groq may reject on request size before context window.
+  if (payloadChars() > maxChars) {
+    const userBudgetChars = Math.max(0, maxChars - systemPrompt.length);
+    const trimmedUser = truncateTextToCharBudgetFromEnd(
+      userContent,
+      userBudgetChars
+    );
     if (trimmedUser !== userContent) truncated = true;
     userContent = trimmedUser;
   }
 
   if (truncated) {
     console.warn(
-      `[groq] truncated context for ${model} (~${totalTokens()} est. tokens, budget ${maxTotalTokens})`
+      `[groq] truncated context for ${model} (${payloadChars()} chars, ~${payloadTokens()} est. tokens, budget ${maxTotalTokens})`
     );
   }
 
