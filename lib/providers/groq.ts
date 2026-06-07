@@ -1,5 +1,7 @@
-import { streamText, type CoreMessage } from "ai";
-import { createGroq } from "@ai-sdk/groq";
+import type { CoreMessage } from "ai";
+
+const GROQ_CHAT_COMPLETIONS_URL =
+  "https://api.groq.com/openai/v1/chat/completions";
 
 const CHARS_PER_TOKEN = 4;
 
@@ -214,6 +216,147 @@ export function resolveGroqCompareLaneModel(
   return model;
 }
 
+function buildGroqApiMessages(input: {
+  messages: CoreMessage[];
+  systemPrompt?: string;
+}): SimpleGroqMessage[] {
+  const out: SimpleGroqMessage[] = [];
+  if (input.systemPrompt?.trim()) {
+    out.push({ role: "system", content: input.systemPrompt.trim() });
+  }
+  for (const message of toSimpleMessages(input.messages)) {
+    if (message.role === "system" && input.systemPrompt?.trim()) continue;
+    out.push(message);
+  }
+  return out;
+}
+
+function extractCompoundChoiceText(choice: unknown): string {
+  if (!choice || typeof choice !== "object") return "";
+  const c = choice as {
+    delta?: { content?: string | null };
+    message?: { content?: string | null };
+  };
+  const parts: string[] = [];
+  if (typeof c.delta?.content === "string" && c.delta.content) {
+    parts.push(c.delta.content);
+  }
+  if (typeof c.message?.content === "string" && c.message.content) {
+    parts.push(c.message.content);
+  }
+  return parts.join("");
+}
+
+function extractCompoundUsage(payload: unknown): {
+  promptTokens: number;
+  completionTokens: number;
+} | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as {
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+    x_groq?: {
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+  };
+  const usage = p.x_groq?.usage ?? p.usage;
+  if (!usage) return null;
+  return {
+    promptTokens: usage.prompt_tokens ?? 0,
+    completionTokens: usage.completion_tokens ?? 0,
+  };
+}
+
+/**
+ * Read the OpenAI-compatible Groq SSE stream directly. Required for
+ * groq/compound (tool-use blocks the AI SDK skips) and more reliable
+ * for Llama models than streamText().fullStream in serverless.
+ */
+async function streamGroqHttp(
+  config: StreamGroqResponseConfig,
+  truncated: { messages: CoreMessage[]; systemPrompt?: string }
+): Promise<void> {
+  const messages = buildGroqApiMessages(truncated);
+  const res = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages,
+      stream: true,
+    }),
+  });
+
+  if (!res.ok) {
+    const details = await res.text().catch(() => "");
+    throw new Error(details || `Groq stream failed with status ${res.status}`);
+  }
+  if (!res.body) throw new Error("Groq stream response had no body");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let accumulated = "";
+  let promptTokens = 0;
+  let completionTokens = 0;
+
+  const handlePayload = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") return;
+    const p = payload as {
+      error?: { message?: string };
+      choices?: unknown[];
+    };
+    if (p.error?.message) throw new Error(p.error.message);
+
+    const usage = extractCompoundUsage(payload);
+    if (usage) {
+      promptTokens = usage.promptTokens;
+      completionTokens = usage.completionTokens;
+    }
+
+    for (const choice of p.choices ?? []) {
+      const chunk = extractCompoundChoiceText(choice);
+      if (!chunk) continue;
+      let delta = chunk;
+      if (chunk.startsWith(accumulated)) {
+        delta = chunk.slice(accumulated.length);
+      }
+      if (delta) {
+        accumulated += delta;
+        config.onChunk(delta);
+      }
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      handlePayload(JSON.parse(data));
+    }
+  }
+
+  buffer += decoder.decode();
+  const tail = buffer.trim();
+  if (tail.startsWith("data:")) {
+    const data = tail.slice(5).trim();
+    if (data && data !== "[DONE]") {
+      handlePayload(JSON.parse(data));
+    }
+  }
+
+  config.onFinish?.({ promptTokens, completionTokens });
+}
+
 async function runGroqStream(config: StreamGroqResponseConfig): Promise<void> {
   const truncated = truncateGroqMessages({
     model: config.model,
@@ -235,22 +378,7 @@ async function runGroqStream(config: StreamGroqResponseConfig): Promise<void> {
     totalChars
   );
 
-  const groq = createGroq({ apiKey: config.apiKey });
-  const result = streamText({
-    model: groq(config.model),
-    system: truncated.systemPrompt,
-    messages: truncated.messages,
-  });
-
-  for await (const chunk of result.textStream) {
-    config.onChunk(chunk);
-  }
-
-  const usage = await result.usage;
-  config.onFinish?.({
-    promptTokens: usage?.promptTokens ?? 0,
-    completionTokens: usage?.completionTokens ?? 0,
-  });
+  await streamGroqHttp(config, truncated);
 }
 
 /**
