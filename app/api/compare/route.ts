@@ -809,14 +809,14 @@ export async function POST(req: NextRequest) {
           userContent = `${recap}\n\n---\n\nNew question:\n${prompt}`;
         }
 
-        const groqLaneModel =
+        const groqApiModel =
           spec.provider === "groq"
             ? resolveGroqCompareLaneModel(spec.model, webSearchEnabled)
             : spec.model;
 
         const prepared = prepareComparePayloadForProvider(
           spec.provider,
-          spec.provider === "groq" ? groqLaneModel : spec.model,
+          spec.provider === "groq" ? groqApiModel : spec.model,
           userContent,
           systemPrompt
         );
@@ -903,9 +903,19 @@ export async function POST(req: NextRequest) {
             tokensIn = usage.inputTokens;
             tokensOut = usage.outputTokens;
           } else if (spec.provider === "groq") {
+            // groq/compound only when compare request has web_search=true.
+            // With web search off, groqApiModel stays llama-3.3-70b-versatile etc.
+            console.log(
+              "[compare] groq lane:",
+              spec.model,
+              "→",
+              groqApiModel,
+              "web_search:",
+              webSearchEnabled
+            );
             await streamGroqResponse({
               apiKey,
-              model: groqLaneModel,
+              model: groqApiModel,
               messages: [{ role: "user", content: laneUserContent }],
               systemPrompt: laneSystemPrompt || undefined,
               onChunk: (chunk) => {
