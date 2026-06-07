@@ -34,7 +34,7 @@ export function truncateGroqMessagesForModel(
   const nonSystem = messages.filter((m) => m.role !== "system");
   if (nonSystem.length === 0) return messages;
 
-  let middle = nonSystem.slice(0, -1).map((m) => ({ ...m }));
+  const middle = nonSystem.slice(0, -1).map((m) => ({ ...m }));
   let lastUser = { ...nonSystem[nonSystem.length - 1]! };
 
   const rebuild = () => [...systemMsgs, ...middle, lastUser];

@@ -43,7 +43,7 @@ interface SearchClientProps {
 
 export function SearchClient({ initialQuery }: SearchClientProps) {
   const searchParams = useSearchParams();
-  const urlQuery = searchParams.get("q") ?? initialQuery;
+  const urlQuery = searchParams?.get("q") ?? initialQuery;
 
   const [query, setQuery] = useState(urlQuery);
   const [results, setResults] = useState<GroupedSearchResults | null>(null);

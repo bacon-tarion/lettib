@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Toaster } from "sonner";
 import { Sidebar } from "@/components/layout/sidebar";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { Header } from "@/components/layout/header";
@@ -32,6 +33,7 @@ export function AppShell({ userEmail, children }: AppShellProps) {
       </div>
       <BottomNav />
       <CommandPalette />
+      <Toaster richColors closeButton position="top-right" />
     </div>
   );
 }

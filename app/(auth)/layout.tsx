@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 
+/** Avoid static prerender — auth forms use useSearchParams inside Suspense. */
+export const dynamic = "force-dynamic";
+
 export default function AuthLayout({
   children,
 }: {

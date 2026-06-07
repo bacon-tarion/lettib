@@ -1,6 +1,18 @@
 import Link from "next/link";
+import nextDynamic from "next/dynamic";
 import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+/** Avoid static prerender — shared client islands (Button, PricingCards) use navigation hooks. */
+export const dynamic = "force-dynamic";
+
+const MarketingToaster = nextDynamic(
+  () =>
+    import("@/components/ui/marketing-toaster").then(
+      (mod) => mod.MarketingToaster
+    ),
+  { ssr: false }
+);
 
 export default function MarketingLayout({
   children,
@@ -125,6 +137,7 @@ export default function MarketingLayout({
           </div>
         </div>
       </footer>
+      <MarketingToaster />
     </div>
   );
 }
