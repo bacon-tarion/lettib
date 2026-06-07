@@ -1,6 +1,6 @@
 import { streamText, type CoreMessage } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { streamGroqCompoundText } from "@/lib/providers/groq-compound";
+import { streamGroqResponse } from "@/lib/providers/groq";
 
 export type WebSearchStreamInput = {
   provider: string;
@@ -145,16 +145,18 @@ export async function streamWebSearchChatResponse(
 
   if (provider === "groq") {
     const parts: string[] = [];
-    const usage = await streamGroqCompoundText({
+    await streamGroqResponse({
       apiKey: input.apiKey,
       model,
-      userContent: lastUserText(input.messages),
+      messages: input.messages,
       systemPrompt: input.systemPrompt,
-      onText: (t) => parts.push(t),
-    });
-    input.onFinish?.({
-      promptTokens: usage.inputTokens,
-      completionTokens: usage.outputTokens,
+      onChunk: (t) => parts.push(t),
+      onFinish: (usage) => {
+        input.onFinish?.({
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+        });
+      },
     });
     return dataStreamResponseFromText(parts.join(""), headers);
   }
@@ -167,16 +169,18 @@ export async function streamWebSearchChatResponse(
       );
     }
     const parts: string[] = [];
-    const usage = await streamGroqCompoundText({
+    await streamGroqResponse({
       apiKey: groqKey,
       model: "groq/compound",
-      userContent: lastUserText(input.messages),
+      messages: input.messages,
       systemPrompt: input.systemPrompt,
-      onText: (t) => parts.push(t),
-    });
-    input.onFinish?.({
-      promptTokens: usage.inputTokens,
-      completionTokens: usage.outputTokens,
+      onChunk: (t) => parts.push(t),
+      onFinish: (usage) => {
+        input.onFinish?.({
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+        });
+      },
     });
     return dataStreamResponseFromText(parts.join(""), headers);
   }

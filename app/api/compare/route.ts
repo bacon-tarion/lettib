@@ -14,15 +14,13 @@ import {
   compareModelLimitError,
 } from "@/lib/subscription/tier";
 import {
-  isGroqCompoundModel,
-  streamGroqCompoundText,
-} from "@/lib/providers/groq-compound";
-import { streamGroqTextCollecting } from "@/lib/providers/groq-retry";
-import {
   humanizeCompareLaneError,
   prepareComparePayloadForProvider,
-  resolveGroqCompareLaneModel,
 } from "@/lib/compare/context-limits";
+import {
+  resolveGroqCompareLaneModel,
+  streamGroqResponse,
+} from "@/lib/providers/groq";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -825,12 +823,6 @@ export async function POST(req: NextRequest) {
         const laneUserContent = prepared.userContent;
         const laneSystemPrompt = prepared.systemPrompt;
 
-        if (spec.provider === "groq") {
-          console.log(
-            `[groq] lane payload prepared for ${groqLaneModel}: user=${laneUserContent.length} chars system=${laneSystemPrompt.length} chars`
-          );
-        }
-
         let apiKey: string | null = null;
         let baseUrl: string | null = null;
 
@@ -910,24 +902,8 @@ export async function POST(req: NextRequest) {
             });
             tokensIn = usage.inputTokens;
             tokensOut = usage.outputTokens;
-          } else if (
-            spec.provider === "groq" &&
-            (isGroqCompoundModel(groqLaneModel) || webSearchEnabled)
-          ) {
-            const usage = await streamGroqCompoundText({
-              apiKey,
-              model: groqLaneModel,
-              userContent: laneUserContent,
-              systemPrompt: laneSystemPrompt || undefined,
-              onText: (chunk) => {
-                accumulated += chunk;
-                enqueue({ type: "chunk", key, text: chunk });
-              },
-            });
-            tokensIn = usage.inputTokens;
-            tokensOut = usage.outputTokens;
           } else if (spec.provider === "groq") {
-            const usage = await streamGroqTextCollecting({
+            await streamGroqResponse({
               apiKey,
               model: groqLaneModel,
               messages: [{ role: "user", content: laneUserContent }],
@@ -936,9 +912,11 @@ export async function POST(req: NextRequest) {
                 accumulated += chunk;
                 enqueue({ type: "chunk", key, text: chunk });
               },
+              onFinish: (usage) => {
+                tokensIn = usage.promptTokens;
+                tokensOut = usage.completionTokens;
+              },
             });
-            tokensIn = usage.inputTokens;
-            tokensOut = usage.outputTokens;
           } else {
             const result = await streamChat({
               provider: spec.provider as

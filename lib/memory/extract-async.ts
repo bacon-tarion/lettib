@@ -1,5 +1,5 @@
+import { generateText } from "ai";
 import { createGroq } from "@ai-sdk/groq";
-import { groqGenerateText } from "@/lib/providers/groq-retry";
 import { createServiceClient } from "@/lib/supabase/service";
 import { logUsageAsync } from "@/lib/usage/log";
 import { calcCompareModelCost } from "@/lib/compare/cost";
@@ -83,7 +83,7 @@ export function triggerMemoryExtractionAsync(opts: {
       );
 
       const groq = createGroq({ apiKey: groqKey });
-      const result = await groqGenerateText({
+      const result = await generateText({
         model: groq(EXTRACTOR_MODEL),
         messages: [{ role: "user", content: prompt }],
       });

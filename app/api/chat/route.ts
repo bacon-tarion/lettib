@@ -3,7 +3,7 @@ import { CoreMessage } from "ai";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { streamChat } from "@/lib/providers";
-import { streamGroqChatDataStreamResponse } from "@/lib/providers/groq-compound";
+import { streamGroqResponse } from "@/lib/providers/groq";
 import {
   fetchGroqKeyForUser,
   streamWebSearchChatResponse,
@@ -32,35 +32,6 @@ const VALID_PROVIDERS = new Set<ProviderName>([
 function catalogHas(provider: string, model: string): boolean {
   const catalog = MODELS_CATALOG as Record<string, readonly { id: string }[]>;
   return !!catalog[provider]?.some((m) => m.id === model);
-}
-
-function coreMessagesToGroqMessages(
-  messages: CoreMessage[],
-  systemPrompt?: string
-): { role: string; content: string }[] {
-  const out: { role: string; content: string }[] = [];
-  if (systemPrompt?.trim()) {
-    out.push({ role: "system", content: systemPrompt.trim() });
-  }
-  for (const m of messages) {
-    if (m.role === "system") continue;
-    let content = "";
-    if (typeof m.content === "string") {
-      content = m.content;
-    } else if (Array.isArray(m.content)) {
-      content = m.content
-        .map((p) =>
-          typeof p === "object" && p && "text" in p
-            ? String((p as { text?: string }).text ?? "")
-            : ""
-        )
-        .join("");
-    }
-    if (m.role === "user" || m.role === "assistant") {
-      out.push({ role: m.role, content });
-    }
-  }
-  return out;
 }
 
 function isValidMessages(v: unknown): v is CoreMessage[] {
@@ -415,25 +386,48 @@ export async function POST(req: NextRequest) {
     }
 
     if (provider === "groq" && images.length === 0) {
-      return streamGroqChatDataStreamResponse({
-        apiKey: trimmedKey,
-        model,
-        messages: coreMessagesToGroqMessages(
-          messages,
-          systemPrompt || undefined
-        ),
-        headers: streamHeaders,
-        onFinish: (usage) => {
-          logUsageAsync(serviceClient, {
-            userId: user.id,
-            conversationId,
-            action: "chat",
-            provider,
-            model,
-            tokensIn: usage.inputTokens,
-            tokensOut: usage.outputTokens,
-            latencyMs: Date.now() - startedAt,
-          });
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          try {
+            await streamGroqResponse({
+              apiKey: trimmedKey,
+              model,
+              messages,
+              systemPrompt: systemPrompt || undefined,
+              onChunk: (chunk) => {
+                controller.enqueue(
+                  encoder.encode(`0:${JSON.stringify(chunk)}\n`)
+                );
+              },
+              onFinish: (usage) => {
+                logUsageAsync(serviceClient, {
+                  userId: user.id,
+                  conversationId,
+                  action: "chat",
+                  provider,
+                  model,
+                  tokensIn: usage.promptTokens,
+                  tokensOut: usage.completionTokens,
+                  latencyMs: Date.now() - startedAt,
+                });
+              },
+            });
+            controller.enqueue(
+              encoder.encode(`d:${JSON.stringify({ finishReason: "stop" })}\n`)
+            );
+            controller.close();
+          } catch (err) {
+            controller.error(err);
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "X-Vercel-AI-Data-Stream": "v1",
+          ...streamHeaders,
         },
       });
     }

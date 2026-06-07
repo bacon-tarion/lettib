@@ -10,7 +10,6 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { getServerApiKey } from "@/lib/providers";
 import { buildScoringMessage } from "@/lib/prompts/scoring";
 import { generateAnthropicText } from "@/lib/providers/anthropic-generate";
-import { groqGenerateText } from "@/lib/providers/groq-retry";
 import { logUsageAsync } from "@/lib/usage/log";
 
 export const runtime = "nodejs";
@@ -278,9 +277,7 @@ export async function POST(req: NextRequest) {
         apiKey,
         baseUrl
       );
-      const runGenerate =
-        scorerProvider === "groq" ? groqGenerateText : generateText;
-      const result = await runGenerate({
+      const result = await generateText({
         model: languageModel,
         messages: [{ role: "user", content: scoringMessage }],
       });
