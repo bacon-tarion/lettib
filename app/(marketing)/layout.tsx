@@ -103,12 +103,17 @@ export default function MarketingLayout({
             <ul className="space-y-1.5">
               <li>
                 <Link href="/privacy" className="text-muted-foreground hover:text-foreground">
-                  Privacy
+                  Privacy Policy
                 </Link>
               </li>
               <li>
                 <Link href="/terms" className="text-muted-foreground hover:text-foreground">
-                  Terms
+                  Terms and Conditions
+                </Link>
+              </li>
+              <li>
+                <Link href="/cookie-policy" className="text-muted-foreground hover:text-foreground">
+                  Cookie Policy
                 </Link>
               </li>
             </ul>
