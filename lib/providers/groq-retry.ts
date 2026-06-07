@@ -109,10 +109,15 @@ export function logGroqSend(model: string, messages: GroqChatMessage[]): void {
 }
 
 const TRANSIENT_MESSAGE_MARKERS = [
+  "too many tokens",
+  "message too long",
+  "context_length_exceeded",
+  "context length exceeded",
   "service unavailable",
   "rate limit",
   "overloaded",
   "try again",
+  "please reduce",
 ] as const;
 
 export function isGroqTransientError(
@@ -122,6 +127,7 @@ export function isGroqTransientError(
   if (status === 503 || status === 429) return true;
   if (!message) return false;
   const lower = message.toLowerCase();
+  if (lower.includes("503") || lower.includes("429")) return true;
   return TRANSIENT_MESSAGE_MARKERS.some((marker) => lower.includes(marker));
 }
 
@@ -149,7 +155,7 @@ function groqErrorMessage(err: unknown): string {
 
 /**
  * Retry a Groq async call once after 1s when the failure looks transient
- * (503/429 or known overload / rate-limit wording).
+ * (503/429, cold-start misclassified length errors, or overload wording).
  */
 export async function withGroqRetry<T>(fn: () => Promise<T>): Promise<T> {
   try {
@@ -161,6 +167,26 @@ export async function withGroqRetry<T>(fn: () => Promise<T>): Promise<T> {
       throw err;
     }
     console.log("[groq] transient error, retrying in 1s...");
+    await sleep(1000);
+    return await fn();
+  }
+}
+
+/**
+ * Retry a Groq streaming call once after 1s. Wraps the full streamText()
+ * invocation and consumption so thrown SDK errors are retried (groqFetch-only
+ * retry does not cover AI SDK streamText exceptions).
+ */
+export async function withGroqStreamRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (
+      !isGroqTransientError(groqErrorStatus(err), groqErrorMessage(err))
+    ) {
+      throw err;
+    }
+    console.log("[groq] transient stream error, retrying in 1s...");
     await sleep(1000);
     return await fn();
   }
@@ -215,7 +241,7 @@ export async function streamGroqTextCollecting(input: {
   systemPrompt?: string;
   onChunk: (text: string) => void;
 }): Promise<{ inputTokens: number; outputTokens: number }> {
-  return withGroqRetry(async () => {
+  return withGroqStreamRetry(async () => {
     const prepared = truncateGroqChatRequest({
       model: input.model,
       messages: input.messages.map((m) => ({

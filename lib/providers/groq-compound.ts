@@ -13,6 +13,8 @@ import {
   groqFetch,
   logGroqSend,
   truncateGroqMessagesForModel,
+  withGroqRetry,
+  withGroqStreamRetry,
   type GroqChatMessage,
 } from "@/lib/providers/groq-retry";
 
@@ -57,7 +59,7 @@ function extractUsage(payload: unknown): GroqCompoundUsage | null {
  * Stream an OpenAI-compatible Groq chat completion via direct HTTP (with
  * transient retry on the initial request). Invokes `onText` for each delta.
  */
-export async function streamGroqOpenAIMessages(input: {
+async function streamGroqOpenAIMessagesOnce(input: {
   apiKey: string;
   model: string;
   messages: GroqChatMessage[];
@@ -147,6 +149,15 @@ export async function streamGroqOpenAIMessages(input: {
   return { inputTokens, outputTokens };
 }
 
+export async function streamGroqOpenAIMessages(input: {
+  apiKey: string;
+  model: string;
+  messages: GroqChatMessage[];
+  onText: (text: string) => void;
+}): Promise<GroqCompoundUsage> {
+  return withGroqStreamRetry(() => streamGroqOpenAIMessagesOnce(input));
+}
+
 /**
  * Stream a Groq Compound completion, invoking `onText` for every prose
  * fragment observed in the SSE feed.
@@ -202,6 +213,15 @@ export async function streamGroqCompoundText(input: {
 
 /** Non-streaming Compound completion — used as a fallback after empty streams. */
 export async function generateGroqCompoundText(input: {
+  apiKey: string;
+  model: string;
+  userContent: string;
+  systemPrompt?: string;
+}): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+  return withGroqRetry(() => generateGroqCompoundTextOnce(input));
+}
+
+async function generateGroqCompoundTextOnce(input: {
   apiKey: string;
   model: string;
   userContent: string;
