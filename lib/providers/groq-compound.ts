@@ -11,14 +11,15 @@
 import {
   GROQ_CHAT_COMPLETIONS_URL,
   groqFetch,
+  logGroqSend,
+  truncateGroqMessagesForModel,
+  type GroqChatMessage,
 } from "@/lib/providers/groq-retry";
 
 export type GroqCompoundUsage = {
   inputTokens: number;
   outputTokens: number;
 };
-
-type GroqChatMessage = { role: string; content: string };
 
 function extractTextFromChoice(choice: unknown): string {
   if (!choice || typeof choice !== "object") return "";
@@ -62,6 +63,9 @@ export async function streamGroqOpenAIMessages(input: {
   messages: GroqChatMessage[];
   onText: (text: string) => void;
 }): Promise<GroqCompoundUsage> {
+  const messages = truncateGroqMessagesForModel(input.model, input.messages);
+  logGroqSend(input.model, messages);
+
   const res = await groqFetch(GROQ_CHAT_COMPLETIONS_URL, {
     method: "POST",
     headers: {
@@ -70,7 +74,7 @@ export async function streamGroqOpenAIMessages(input: {
     },
     body: JSON.stringify({
       model: input.model,
-      messages: input.messages,
+      messages,
       stream: true,
     }),
   });
@@ -209,6 +213,9 @@ export async function generateGroqCompoundText(input: {
   }
   messages.push({ role: "user", content: input.userContent });
 
+  const truncatedMessages = truncateGroqMessagesForModel(input.model, messages);
+  logGroqSend(input.model, truncatedMessages);
+
   const res = await groqFetch(GROQ_CHAT_COMPLETIONS_URL, {
     method: "POST",
     headers: {
@@ -217,7 +224,7 @@ export async function generateGroqCompoundText(input: {
     },
     body: JSON.stringify({
       model: input.model,
-      messages,
+      messages: truncatedMessages,
       stream: false,
     }),
   });

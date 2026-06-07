@@ -4,6 +4,110 @@ import { createGroq } from "@ai-sdk/groq";
 const GROQ_CHAT_COMPLETIONS_URL =
   "https://api.groq.com/openai/v1/chat/completions";
 
+/** Compare follow-ups embed prior rounds before this separator. */
+const FOLLOW_UP_HISTORY_SEP = "\n\n---\n\nNew question:\n";
+
+export type GroqChatMessage = { role: string; content: string };
+
+/** Hard total-content char ceiling enforced immediately before Groq HTTP calls. */
+export function groqMaxContentChars(model: string): number {
+  if (model === "llama-3.1-8b-instant") return 4000;
+  return 8000;
+}
+
+function groqMessageContentChars(messages: GroqChatMessage[]): number {
+  return messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+}
+
+/**
+ * Trim oldest conversation content first while keeping the system prompt and
+ * the most recent user message intact.
+ */
+export function truncateGroqMessagesForModel(
+  model: string,
+  messages: GroqChatMessage[]
+): GroqChatMessage[] {
+  const maxChars = groqMaxContentChars(model);
+  if (groqMessageContentChars(messages) <= maxChars) return messages;
+
+  const systemMsgs = messages.filter((m) => m.role === "system");
+  const nonSystem = messages.filter((m) => m.role !== "system");
+  if (nonSystem.length === 0) return messages;
+
+  let middle = nonSystem.slice(0, -1).map((m) => ({ ...m }));
+  let lastUser = { ...nonSystem[nonSystem.length - 1]! };
+
+  const rebuild = () => [...systemMsgs, ...middle, lastUser];
+
+  while (groqMessageContentChars(rebuild()) > maxChars && middle.length > 0) {
+    middle.shift();
+  }
+
+  if (groqMessageContentChars(rebuild()) > maxChars) {
+    const content = lastUser.content;
+    const sepIdx = content.indexOf(FOLLOW_UP_HISTORY_SEP);
+    if (sepIdx !== -1) {
+      const recap = content.slice(0, sepIdx);
+      const suffix = content.slice(sepIdx);
+      const fixed = groqMessageContentChars(systemMsgs) + suffix.length;
+      const recapBudget = Math.max(0, maxChars - fixed);
+      const trimmedRecap =
+        recap.length > recapBudget ? recap.slice(recap.length - recapBudget) : recap;
+      lastUser = { ...lastUser, content: trimmedRecap + suffix };
+    }
+  }
+
+  if (groqMessageContentChars(rebuild()) > maxChars) {
+    const content = lastUser.content;
+    const sepIdx = content.indexOf(FOLLOW_UP_HISTORY_SEP);
+    const suffix = sepIdx !== -1 ? content.slice(sepIdx) : "";
+    const prefix = sepIdx !== -1 ? content.slice(0, sepIdx) : content;
+    const fixed = groqMessageContentChars(systemMsgs) + suffix.length;
+    const prefixBudget = Math.max(0, maxChars - fixed);
+    const trimmedPrefix =
+      prefix.length > prefixBudget
+        ? prefix.slice(prefix.length - prefixBudget)
+        : prefix;
+    lastUser = { ...lastUser, content: trimmedPrefix + suffix };
+  }
+
+  return rebuild();
+}
+
+/** Merge optional system prompt into a message list for truncation. */
+export function truncateGroqChatRequest(input: {
+  model: string;
+  messages: GroqChatMessage[];
+  systemPrompt?: string;
+}): { messages: GroqChatMessage[]; systemPrompt?: string } {
+  const merged: GroqChatMessage[] = [];
+  if (input.systemPrompt?.trim()) {
+    merged.push({ role: "system", content: input.systemPrompt.trim() });
+  }
+  for (const message of input.messages) {
+    merged.push({ ...message });
+  }
+
+  const truncated = truncateGroqMessagesForModel(input.model, merged);
+  const systemMsgs = truncated.filter((m) => m.role === "system");
+  const rest = truncated.filter((m) => m.role !== "system");
+
+  return {
+    systemPrompt:
+      systemMsgs.length > 0
+        ? systemMsgs.map((m) => m.content).join("\n")
+        : undefined,
+    messages: rest,
+  };
+}
+
+export function logGroqSend(model: string, messages: GroqChatMessage[]): void {
+  const chars = groqMessageContentChars(messages);
+  console.log(
+    `[groq] SENDING request — model: ${model}, content chars: ${chars}`
+  );
+}
+
 const TRANSIENT_MESSAGE_MARKERS = [
   "service unavailable",
   "rate limit",
@@ -112,10 +216,25 @@ export async function streamGroqTextCollecting(input: {
   onChunk: (text: string) => void;
 }): Promise<{ inputTokens: number; outputTokens: number }> {
   return withGroqRetry(async () => {
+    const prepared = truncateGroqChatRequest({
+      model: input.model,
+      messages: input.messages.map((m) => ({
+        role: m.role,
+        content: typeof m.content === "string" ? m.content : String(m.content),
+      })),
+      systemPrompt: input.systemPrompt,
+    });
+    const sendMessages: GroqChatMessage[] = [];
+    if (prepared.systemPrompt) {
+      sendMessages.push({ role: "system", content: prepared.systemPrompt });
+    }
+    sendMessages.push(...prepared.messages);
+    logGroqSend(input.model, sendMessages);
+
     const result = streamText({
       model: createGroq({ apiKey: input.apiKey })(input.model),
-      system: input.systemPrompt,
-      messages: input.messages,
+      system: prepared.systemPrompt,
+      messages: prepared.messages as CoreMessage[],
     });
 
     for await (const chunk of result.textStream) {
