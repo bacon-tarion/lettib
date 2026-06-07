@@ -1,9 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, Circle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  mergeOnboardingStatus,
+  parseOnboardingStatusPayload,
+  type OnboardingStatus,
+} from "@/lib/onboarding/queries";
 
 interface OnboardingBannerProps {
   hasApiKey: boolean;
@@ -17,34 +22,45 @@ type Step = {
   href?: string;
 };
 
-type OnboardingStatus = {
-  hasApiKey: boolean;
-  hasRunCompare: boolean;
-  dismissed: boolean;
-};
+function propsToStatus({
+  hasApiKey,
+  hasRunCompare,
+  dismissed,
+}: OnboardingBannerProps): OnboardingStatus {
+  return { hasApiKey, hasRunCompare, dismissed };
+}
 
 export function OnboardingBanner({
   hasApiKey,
   hasRunCompare,
   dismissed,
 }: OnboardingBannerProps) {
-  const [status, setStatus] = useState<OnboardingStatus>({
-    hasApiKey,
-    hasRunCompare,
-    dismissed,
-  });
+  const [status, setStatus] = useState<OnboardingStatus>(() =>
+    propsToStatus({ hasApiKey, hasRunCompare, dismissed })
+  );
   const [hidden, setHidden] = useState(false);
+
+  const applyStatus = useCallback((next: OnboardingStatus) => {
+    setStatus((prev) => mergeOnboardingStatus(prev, next));
+  }, []);
+
+  useEffect(() => {
+    applyStatus(propsToStatus({ hasApiKey, hasRunCompare, dismissed }));
+  }, [hasApiKey, hasRunCompare, dismissed, applyStatus]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function refreshStatus() {
       try {
-        const res = await fetch("/api/onboarding/status", { cache: "no-store" });
+        const res = await fetch(`/api/onboarding/status?_=${Date.now()}`, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
         if (!res.ok) return;
-        const data = (await res.json()) as OnboardingStatus;
-        if (cancelled) return;
-        setStatus(data);
+        const parsed = parseOnboardingStatusPayload(await res.json());
+        if (!parsed || cancelled) return;
+        applyStatus(parsed);
       } catch (err) {
         console.error("[onboarding] status refresh failed:", err);
       }
@@ -62,15 +78,23 @@ export function OnboardingBanner({
       }
     }
 
+    function onPageShow(event: PageTransitionEvent) {
+      if (event.persisted) {
+        void refreshStatus();
+      }
+    }
+
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pageshow", onPageShow);
 
     return () => {
       cancelled = true;
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pageshow", onPageShow);
     };
-  }, []);
+  }, [applyStatus]);
 
   if (
     status.dismissed ||
@@ -96,6 +120,7 @@ export function OnboardingBanner({
 
   async function handleDismiss() {
     setHidden(true);
+    applyStatus({ hasApiKey: status.hasApiKey, hasRunCompare: status.hasRunCompare, dismissed: true });
     try {
       const res = await fetch("/api/onboarding/dismiss", { method: "POST" });
       if (!res.ok) {

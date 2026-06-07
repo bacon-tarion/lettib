@@ -165,6 +165,7 @@ export async function addApiKey(
     }
 
     revalidatePath("/settings");
+    revalidatePath("/dashboard");
     return { success: true, lastFour: keyLastFour ?? undefined };
   } catch (err) {
     console.error("[addApiKey] Unexpected error:", err);
@@ -283,6 +284,7 @@ export async function testApiKey(
     .eq("id", connectionId);
 
   revalidatePath("/settings");
+  revalidatePath("/dashboard");
   return { success: testOk, error: testError };
 }
 
@@ -314,6 +316,7 @@ export async function deleteApiKey(
   }
 
   revalidatePath("/settings");
+  revalidatePath("/dashboard");
   return { success: true };
 }
 

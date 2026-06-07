@@ -8,7 +8,10 @@ import { createClient } from "@/lib/supabase/server";
 import { listTeams } from "@/app/(app)/teams/actions";
 import { fetchRecentActivityMerged } from "@/lib/dashboard/recent-activity";
 import { getProviderLabel } from "@/lib/providers/models";
+import { fetchOnboardingStatus } from "@/lib/onboarding/queries";
 import { getUserUsageSnapshot } from "@/lib/usage/queries";
+
+export const dynamic = "force-dynamic";
 
 function formatRelative(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -44,35 +47,11 @@ export default async function DashboardPage() {
     user.email?.split("@")[0] ??
     "there";
 
-  const { data: profileRow } = await supabase
-    .from("profiles")
-    .select("onboarding_dismissed")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  const onboardingDismissed =
-    (profileRow as { onboarding_dismissed?: boolean } | null)
-      ?.onboarding_dismissed ?? false;
-
-  let hasApiKey = false;
-  let hasRunCompare = false;
-
-  if (!onboardingDismissed) {
-    const [{ count: apiKeyCount }, { count: compareCount }] = await Promise.all([
-      supabase
-        .from("api_connections")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", user.id)
-        .in("status", ["connected", "untested"]),
-      supabase
-        .from("conversations")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", user.id)
-        .eq("mode", "compare"),
-    ]);
-    hasApiKey = (apiKeyCount ?? 0) > 0;
-    hasRunCompare = (compareCount ?? 0) > 0;
-  }
+  const {
+    hasApiKey,
+    hasRunCompare,
+    dismissed: onboardingDismissed,
+  } = await fetchOnboardingStatus(supabase, user.id);
 
   const [{ data: pinnedData }, recentActivity, snapshot, teams] = await Promise.all([
     supabase
