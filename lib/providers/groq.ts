@@ -187,10 +187,10 @@ function groqRetryDelayMs(message: string): number {
   if (match) {
     const seconds = parseFloat(match[1]!);
     if (!Number.isNaN(seconds)) {
-      return Math.min(Math.round(seconds * 1000 + 500), 8000);
+      return Math.min(Math.round(seconds * 1000 + 200), 2000);
     }
   }
-  return 2000;
+  return 800;
 }
 
 /**
