@@ -5,19 +5,6 @@ const GROQ_CHAT_COMPLETIONS_URL =
 
 const CHARS_PER_TOKEN = 4;
 
-const TRANSIENT_ERROR_MARKERS = [
-  "too many tokens",
-  "message too long",
-  "context_length_exceeded",
-  "service unavailable",
-  "rate limit",
-  "overloaded",
-  "try again",
-  "503",
-  "429",
-  "please reduce",
-] as const;
-
 type SimpleGroqMessage = {
   role: "user" | "assistant" | "system";
   content: string;
@@ -191,12 +178,6 @@ function truncateGroqMessages(input: {
   };
 }
 
-function isTransientGroqError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  const lower = message.toLowerCase();
-  return TRANSIENT_ERROR_MARKERS.some((marker) => lower.includes(marker));
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -278,11 +259,6 @@ function extractCompoundUsage(payload: unknown): {
   };
 }
 
-/**
- * Read the OpenAI-compatible Groq SSE stream directly. Required for
- * groq/compound (tool-use blocks the AI SDK skips) and more reliable
- * for Llama models than streamText().fullStream in serverless.
- */
 async function streamGroqHttp(
   config: StreamGroqResponseConfig,
   truncated: { messages: CoreMessage[]; systemPrompt?: string }
@@ -319,6 +295,7 @@ async function streamGroqHttp(
       let accumulated = "";
       let promptTokens = 0;
       let completionTokens = 0;
+      let streamError: string | undefined;
 
       const handlePayload = (payload: unknown) => {
         if (!payload || typeof payload !== "object") return;
@@ -326,7 +303,10 @@ async function streamGroqHttp(
           error?: { message?: string };
           choices?: unknown[];
         };
-        if (p.error?.message) throw new Error(p.error.message);
+        if (p.error?.message) {
+          streamError = p.error.message;
+          return;
+        }
 
         const usage = extractCompoundUsage(payload);
         if (usage) {
@@ -348,7 +328,7 @@ async function streamGroqHttp(
         }
       };
 
-      while (true) {
+      streamRead: while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -360,21 +340,28 @@ async function streamGroqHttp(
           const data = trimmed.slice(5).trim();
           if (!data || data === "[DONE]") continue;
           handlePayload(JSON.parse(data));
+          if (streamError) break streamRead;
         }
       }
 
-      buffer += decoder.decode();
-      const tail = buffer.trim();
-      if (tail.startsWith("data:")) {
-        const data = tail.slice(5).trim();
-        if (data && data !== "[DONE]") {
-          handlePayload(JSON.parse(data));
+      if (!streamError) {
+        buffer += decoder.decode();
+        const tail = buffer.trim();
+        if (tail.startsWith("data:")) {
+          const data = tail.slice(5).trim();
+          if (data && data !== "[DONE]") {
+            handlePayload(JSON.parse(data));
+          }
         }
+      }
+
+      if (streamError) {
+        throw new Error(streamError);
       }
 
       config.onFinish?.({ promptTokens, completionTokens });
       if (attempt === 2 && attempt1Failed) {
-        console.log("[groq] attempt 2 succeeded after 413/429 transient");
+        console.log("[groq] attempt 2 succeeded after transient error");
       }
       return;
     } catch (err) {
@@ -396,7 +383,9 @@ async function streamGroqHttp(
   }
 }
 
-async function runGroqStream(config: StreamGroqResponseConfig): Promise<void> {
+export async function streamGroqResponse(
+  config: StreamGroqResponseConfig
+): Promise<void> {
   const truncated = truncateGroqMessages({
     model: config.model,
     messages: config.messages,
@@ -418,24 +407,4 @@ async function runGroqStream(config: StreamGroqResponseConfig): Promise<void> {
   );
 
   await streamGroqHttp(config, truncated);
-}
-
-/**
- * Stream a Groq chat completion with truncation and a single transient retry.
- */
-export async function streamGroqResponse(
-  config: StreamGroqResponseConfig
-): Promise<void> {
-  try {
-    await runGroqStream(config);
-  } catch (err) {
-    if (!isTransientGroqError(err)) throw err;
-    console.log("[groq] transient error, retrying once...");
-    await sleep(1000);
-    try {
-      await runGroqStream(config);
-    } catch (retryErr) {
-      throw retryErr;
-    }
-  }
 }
