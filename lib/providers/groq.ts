@@ -394,6 +394,12 @@ async function streamGroqHttp(
 export async function streamGroqResponse(
   config: StreamGroqResponseConfig
 ): Promise<void> {
+  console.log(
+    "[groq] streamGroqResponse called, model:",
+    config.model,
+    "messages:",
+    config.messages.length
+  );
   const truncated = truncateGroqMessages({
     model: config.model,
     messages: config.messages,
