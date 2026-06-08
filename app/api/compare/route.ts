@@ -1008,7 +1008,13 @@ export async function POST(req: NextRequest) {
         } catch (err) {
           const raw = err instanceof Error ? err.message : "Stream failed";
           const message = humanizeCompareLaneError(raw, spec.provider);
-          console.error("[compare] lane failed:", key, err);
+          console.error(
+            `[compare] lane failed provider=${spec.provider} model=${spec.model}`
+          );
+          console.error(
+            `[compare] lane error detail:`,
+            err instanceof Error ? err.message : String(err)
+          );
           enqueue({ type: "error", key, error: message });
           await persistAndEmitSaved(key, spec, position, {
             content: accumulated,
