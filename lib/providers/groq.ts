@@ -288,6 +288,7 @@ async function streamGroqHttp(
   truncated: { messages: CoreMessage[]; systemPrompt?: string }
 ): Promise<void> {
   const messages = buildGroqApiMessages(truncated);
+  let attempt1Failed = false;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     let failedHttpStatus: number | undefined;
@@ -372,9 +373,13 @@ async function streamGroqHttp(
       }
 
       config.onFinish?.({ promptTokens, completionTokens });
+      if (attempt === 2 && attempt1Failed) {
+        console.log("[groq] attempt 2 succeeded after 413/429 transient");
+      }
       return;
     } catch (err) {
       if (attempt === 1) {
+        attempt1Failed = true;
         const message = err instanceof Error ? err.message : String(err);
         const delayMs = groqRetryDelayMs(message);
         console.log(
