@@ -385,6 +385,7 @@ async function streamGroqHttp(
         console.log(
           "[groq] attempt 1 failed:",
           message,
+          failedHttpStatus != null ? `(HTTP ${failedHttpStatus})` : "",
           `— retrying in ${delayMs}ms`
         );
         await sleep(delayMs);
