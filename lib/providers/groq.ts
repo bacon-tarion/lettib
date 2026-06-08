@@ -201,6 +201,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function groqRetryDelayMs(message: string): number {
+  const match = message.match(/try again in ([\d.]+)s/i);
+  if (match) {
+    const seconds = parseFloat(match[1]!);
+    if (!Number.isNaN(seconds)) {
+      return Math.min(Math.round(seconds * 1000 + 500), 8000);
+    }
+  }
+  return 2000;
+}
+
 /**
  * Compare-only Groq model resolver. Upgrades to groq/compound ONLY when the
  * compare request has web_search=true. Never call with webSearchEnabled=true
@@ -279,6 +290,7 @@ async function streamGroqHttp(
   const messages = buildGroqApiMessages(truncated);
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    let failedHttpStatus: number | undefined;
     try {
       const res = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
         method: "POST",
@@ -294,6 +306,7 @@ async function streamGroqHttp(
       });
 
       if (!res.ok) {
+        failedHttpStatus = res.status;
         const errText = await res.text().catch(() => "");
         throw new Error(`Groq HTTP ${res.status}: ${errText}`);
       }
@@ -363,12 +376,13 @@ async function streamGroqHttp(
     } catch (err) {
       if (attempt === 1) {
         const message = err instanceof Error ? err.message : String(err);
+        const delayMs = groqRetryDelayMs(message);
         console.log(
           "[groq] attempt 1 failed:",
           message,
-          "— retrying in 1500ms"
+          `— retrying in ${delayMs}ms`
         );
-        await sleep(1500);
+        await sleep(delayMs);
         continue;
       }
       throw err;
