@@ -45,7 +45,11 @@ export function prepareComparePayloadForProvider(
   return { userContent, systemPrompt };
 }
 
-export function humanizeCompareLaneError(message: string): string {
+export function humanizeCompareLaneError(
+  message: string,
+  provider?: string
+): string {
+  if (provider === "groq") return message;
   const lower = message.toLowerCase();
   if (
     lower.includes("request entity too large") ||
