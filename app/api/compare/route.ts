@@ -920,7 +920,6 @@ export async function POST(req: NextRequest) {
               messages: [{ role: "user", content: laneUserContent }],
               systemPrompt: laneSystemPrompt || undefined,
               onChunk: (chunk) => {
-                console.log("[groq] chunk received:", chunk.length);
                 accumulated += chunk;
                 enqueue({ type: "chunk", key, text: chunk });
               },

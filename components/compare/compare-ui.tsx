@@ -317,6 +317,7 @@ export function CompareUI({
   const retryOneRef = useRef<(r: ResponseState) => Promise<void>>(
     async () => {}
   );
+  const autoRetryCountRef = useRef<Record<string, number>>({});
 
   // ─── Session 11: per-model & per-response selection state ──────────────
   //
@@ -867,6 +868,7 @@ export function CompareUI({
               }));
               break;
             case "done":
+              autoRetryCountRef.current[obj.key as string] = 0;
               updateResponse(obj.key, {
                 status: "done",
                 tokensIn: obj.tokens_in ?? 0,
@@ -902,8 +904,11 @@ export function CompareUI({
             case "error": {
               const retryAfterMs =
                 typeof obj.retryAfterMs === "number" ? obj.retryAfterMs : 0;
-              if (retryAfterMs > 0) {
-                const responseKey = obj.key as string;
+              const responseKey = obj.key as string;
+              const maxAutoRetries = 2;
+              const autoRetries = autoRetryCountRef.current[responseKey] ?? 0;
+              if (retryAfterMs > 0 && autoRetries < maxAutoRetries) {
+                autoRetryCountRef.current[responseKey] = autoRetries + 1;
                 let secondsLeft = Math.ceil(retryAfterMs / 1000);
 
                 const tickCountdown = () => {

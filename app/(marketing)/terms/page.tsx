@@ -46,6 +46,12 @@ export default function TermsPage() {
           Pro and Power include a 7-day free trial. Subscriptions auto-renew. Cancel
           anytime via Settings → Subscription. No refunds — all payments are final.
         </p>
+        <p className="mb-4">
+          <strong>Lifetime Access:</strong> The &quot;Lifetime&quot; plan provides access
+          to LettiB for the operational lifetime of the product. Let It Be IT Solutions
+          LLC reserves the right to discontinue the service with 90 days notice. Lifetime
+          access is non-transferable and tied to a single user account.
+        </p>
 
         <h2 className="text-xl font-semibold mt-8 mb-3">5. Your API Keys</h2>
         <p className="mb-4">

@@ -267,7 +267,6 @@ async function streamGroqHttp(
   let attempt1Failed = false;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    console.log("[groq] starting attempt", attempt);
     let failedHttpStatus: number | undefined;
     try {
       const res = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
@@ -363,7 +362,6 @@ async function streamGroqHttp(
       config.onFinish?.({ promptTokens, completionTokens });
       if (attempt === 2 && attempt1Failed) {
         console.log("[groq] attempt 2 succeeded after transient error");
-        console.log("[groq] attempt 1 failed flag:", attempt1Failed);
       }
       return;
     } catch (err) {
@@ -394,12 +392,6 @@ async function streamGroqHttp(
 export async function streamGroqResponse(
   config: StreamGroqResponseConfig
 ): Promise<void> {
-  console.log(
-    "[groq] streamGroqResponse called, model:",
-    config.model,
-    "messages:",
-    config.messages.length
-  );
   const truncated = truncateGroqMessages({
     model: config.model,
     messages: config.messages,
