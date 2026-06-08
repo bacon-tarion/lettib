@@ -929,6 +929,11 @@ export function CompareUI({
 
                 window.setTimeout(() => {
                   window.clearInterval(intervalId);
+                  updateResponse(responseKey, {
+                    status: "pending",
+                    content: "",
+                    error: undefined,
+                  });
                   const row = roundsRef.current
                     .flatMap((round) => round.responses)
                     .find((r) => r.key === responseKey);
