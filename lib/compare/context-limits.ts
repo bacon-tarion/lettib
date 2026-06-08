@@ -45,6 +45,16 @@ export function prepareComparePayloadForProvider(
   return { userContent, systemPrompt };
 }
 
+export function isGroqAutoRetryError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("request entity too large") ||
+    lower.includes("too many tokens") ||
+    lower.includes("rate limit") ||
+    lower.includes("try again")
+  );
+}
+
 export function humanizeCompareLaneError(
   message: string,
   provider?: string

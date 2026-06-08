@@ -15,6 +15,7 @@ import {
 } from "@/lib/subscription/tier";
 import {
   humanizeCompareLaneError,
+  isGroqAutoRetryError,
   prepareComparePayloadForProvider,
 } from "@/lib/compare/context-limits";
 import {
@@ -1015,7 +1016,11 @@ export async function POST(req: NextRequest) {
             `[compare] lane error detail:`,
             err instanceof Error ? err.message : String(err)
           );
-          enqueue({ type: "error", key, error: message });
+          if (spec.provider === "groq" && isGroqAutoRetryError(raw)) {
+            enqueue({ type: "error", key, error: message, retryAfterMs: 5000 });
+          } else {
+            enqueue({ type: "error", key, error: message });
+          }
           await persistAndEmitSaved(key, spec, position, {
             content: accumulated,
             tokens_in: 0,

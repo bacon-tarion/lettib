@@ -314,6 +314,9 @@ export function CompareUI({
   /** When not `manual`, reflects the last AI Team preset applied to checkboxes. */
   const [teamPresetId, setTeamPresetId] = useState<string>("manual");
   const [retryingKey, setRetryingKey] = useState<string | null>(null);
+  const retryOneRef = useRef<(r: ResponseState) => Promise<void>>(
+    async () => {}
+  );
 
   // ─── Session 11: per-model & per-response selection state ──────────────
   //
@@ -897,6 +900,40 @@ export function CompareUI({
               }
               break;
             case "error": {
+              const retryAfterMs =
+                typeof obj.retryAfterMs === "number" ? obj.retryAfterMs : 0;
+              if (retryAfterMs > 0) {
+                const responseKey = obj.key as string;
+                let secondsLeft = Math.ceil(retryAfterMs / 1000);
+
+                const tickCountdown = () => {
+                  updateResponse(responseKey, {
+                    status: "pending",
+                    error: null,
+                    content: `Retrying in ${secondsLeft}s...`,
+                  });
+                };
+
+                tickCountdown();
+                const intervalId = window.setInterval(() => {
+                  secondsLeft -= 1;
+                  if (secondsLeft > 0) {
+                    tickCountdown();
+                  }
+                }, 1000);
+
+                window.setTimeout(() => {
+                  window.clearInterval(intervalId);
+                  const row = roundsRef.current
+                    .flatMap((round) => round.responses)
+                    .find((r) => r.key === responseKey);
+                  if (row) {
+                    void retryOneRef.current(row);
+                  }
+                }, retryAfterMs);
+                break;
+              }
+
               updateResponse(obj.key, {
                 status: "error",
                 error: obj.error || "Request failed",
@@ -1566,6 +1603,8 @@ export function CompareUI({
     // scores after a retry, they'll click "Grade answer" on the card.
     setRetryingKey(null);
   }
+
+  retryOneRef.current = retryOne;
 
   function updateCard(key: string, patch: Partial<ResponseState>) {
     const cur = roundsRef.current;
