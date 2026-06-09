@@ -938,6 +938,7 @@ export function CompareUI({
                     .flatMap((round) => round.responses)
                     .find((r) => r.key === responseKey);
                   if (row) {
+                    setRetryingKey(null);
                     void retryOneRef.current(row);
                   }
                 }, retryAfterMs);
