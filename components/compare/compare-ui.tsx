@@ -314,6 +314,7 @@ export function CompareUI({
   /** When not `manual`, reflects the last AI Team preset applied to checkboxes. */
   const [teamPresetId, setTeamPresetId] = useState<string>("manual");
   const [retryingKey, setRetryingKey] = useState<string | null>(null);
+  const retryingKeyRef = useRef<string | null>(null);
   const retryOneRef = useRef<(r: ResponseState) => Promise<void>>(
     async () => {}
   );
@@ -939,6 +940,7 @@ export function CompareUI({
                     .find((r) => r.key === responseKey);
                   if (row) {
                     setRetryingKey(null);
+                    retryingKeyRef.current = null;
                     void retryOneRef.current(row);
                   }
                 }, retryAfterMs);
@@ -1536,12 +1538,13 @@ export function CompareUI({
 
   async function retryOne(r: ResponseState) {
     const roundPrompt = promptForResponseKey(r.key);
-    if (!roundPrompt.trim() || !conversationId || retryingKey) {
+    if (!roundPrompt.trim() || !conversationId || retryingKeyRef.current) {
       return;
     }
 
     setGlobalError(null);
     setRetryingKey(r.key);
+    retryingKeyRef.current = r.key;
 
     updateCard(r.key, {
       status: "pending",
@@ -1570,6 +1573,7 @@ export function CompareUI({
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Network error");
       setRetryingKey(null);
+      retryingKeyRef.current = null;
       return;
     }
 
@@ -1577,6 +1581,7 @@ export function CompareUI({
       const errText = await res.text().catch(() => "");
       setGlobalError(errText || `Request failed (${res.status})`);
       setRetryingKey(null);
+      retryingKeyRef.current = null;
       return;
     }
 
@@ -1613,6 +1618,7 @@ export function CompareUI({
     // (Session 11) so there's no follow-up call here. If the user wants
     // scores after a retry, they'll click "Grade answer" on the card.
     setRetryingKey(null);
+    retryingKeyRef.current = null;
   }
 
   retryOneRef.current = retryOne;
