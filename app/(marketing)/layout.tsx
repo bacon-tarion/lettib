@@ -42,6 +42,9 @@ export default function MarketingLayout({
             <Link href="/#faq" className="hover:text-foreground transition-colors">
               FAQ
             </Link>
+            <Link href="/contact" className="hover:text-foreground transition-colors">
+              Contact
+            </Link>
           </nav>
           <div className="flex items-center gap-2">
             <Link href="/login" className="text-sm text-muted-foreground hover:text-foreground hidden sm:inline-block">
