@@ -2,7 +2,6 @@ import Link from "next/link";
 import { PricingCards } from "./pricing-cards";
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
-import { PRICING_USD } from "@/lib/pricing";
 import { getStripePriceIds } from "@/lib/stripe/prices";
 
 export const metadata = {
