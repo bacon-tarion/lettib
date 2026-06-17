@@ -1,5 +1,7 @@
 export const metadata = {
-  title: "Terms and Conditions — LettiB",
+  title: "Terms & Conditions",
+  description:
+    "Terms of service for LettiB — subscriptions, BYOK API keys, acceptable use, and billing policies.",
 };
 
 export default function TermsPage() {

@@ -1,5 +1,6 @@
 export const metadata = {
-  title: "Contact — LettiB",
+  title: "Contact",
+  description: "Get in touch with the LettiB team.",
 };
 
 export default function ContactPage() {

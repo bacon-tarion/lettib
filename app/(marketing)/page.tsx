@@ -15,6 +15,45 @@ import { PRICING_USD, COMPARE_MODELS_BY_PLAN } from "@/lib/pricing";
 import { getStripePriceIds } from "@/lib/stripe/prices";
 import { PricingCards } from "./pricing/pricing-cards";
 
+const SITE_DESCRIPTION =
+  "Run one prompt through ChatGPT, Claude, Gemini, and Grok at once. Compare answers side by side, then merge them into one synthesized answer. Bring your own API keys — no markup, no training on your data.";
+
+const JSON_LD = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "LettiB",
+  applicationCategory: "BusinessApplication",
+  operatingSystem: "Web",
+  description: SITE_DESCRIPTION,
+  url: "https://www.lettib.com",
+  offers: [
+    {
+      "@type": "Offer",
+      name: "Free",
+      price: "0",
+      priceCurrency: "USD",
+    },
+    {
+      "@type": "Offer",
+      name: "Pro",
+      price: "15",
+      priceCurrency: "USD",
+    },
+    {
+      "@type": "Offer",
+      name: "Power",
+      price: "35",
+      priceCurrency: "USD",
+    },
+    {
+      "@type": "Offer",
+      name: "Lifetime",
+      price: "79",
+      priceCurrency: "USD",
+    },
+  ],
+};
+
 const PROBLEMS = [
   {
     title: "Scattered across tabs",
@@ -103,6 +142,10 @@ export default function LandingPage() {
 
   return (
     <div className="bg-background text-foreground">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
+      />
       {/* Hero */}
       <section className="relative overflow-hidden border-b border-border">
         <div

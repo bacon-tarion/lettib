@@ -1,5 +1,7 @@
 export const metadata = {
-  title: "Cookie Policy — LettiB",
+  title: "Cookie Policy",
+  description:
+    "LettiB uses only essential authentication cookies — no advertising or analytics trackers.",
 };
 
 export default function CookiePolicyPage() {

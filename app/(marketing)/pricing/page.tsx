@@ -6,8 +6,9 @@ import { PRICING_USD } from "@/lib/pricing";
 import { getStripePriceIds } from "@/lib/stripe/prices";
 
 export const metadata = {
-  title: "Pricing — LettiB",
-  description: `Simple BYOK pricing for the LettiB multi-AI workspace. Free ($${PRICING_USD.free} forever), Pro ($${PRICING_USD.proMonthly}/mo), Power ($${PRICING_USD.powerMonthly}/mo), and Lifetime BYOK ($${PRICING_USD.lifetimeByok} one-time).`,
+  title: "Pricing",
+  description:
+    "Free forever with BYOK. Pro $15/mo, Power $35/mo, or Lifetime $79 one-time. Compare up to 6 AI models at once and pay providers directly — zero markup.",
 };
 
 export default function PricingPage() {

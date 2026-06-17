@@ -1,5 +1,7 @@
 export const metadata = {
-  title: "Privacy Policy — LettiB",
+  title: "Privacy Policy",
+  description:
+    "How LettiB collects, uses, and protects your data — including encrypted API keys and workspace content.",
 };
 
 const PRIVACY_HTML = `
