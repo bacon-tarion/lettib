@@ -139,6 +139,16 @@ export default function MarketingLayout({
             </ul>
           </div>
         </div>
+        <div className="mx-auto max-w-6xl px-4 pb-6">
+          <a href="https://tools.cafe" target="_blank" rel="noopener">
+            <img
+              src="https://tools.cafe/b/dark.svg"
+              alt="Featured on tools.cafe"
+              width={198}
+              height={62}
+            />
+          </a>
+        </div>
         <div className="border-t">
           <div className="mx-auto max-w-6xl px-4 py-4 text-xs text-muted-foreground">
             © {new Date().getFullYear()} LettiB. All rights reserved.
