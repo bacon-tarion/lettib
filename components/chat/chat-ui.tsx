@@ -552,6 +552,10 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const hasProcessingFiles = attachedFiles.some(
+      (f) => f.status === "processing"
+    );
+    if (hasProcessingFiles) return;
     if (!input.trim() || isLoading) return;
     const fileContext = buildFileContextText(attachedFiles);
     lastUserInputRef.current = input.trim() + fileContext;
@@ -599,6 +603,10 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
       </div>
     );
   }
+
+  const hasProcessingFiles = attachedFiles.some(
+    (f) => f.status === "processing"
+  );
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem-2rem)] max-w-3xl mx-auto">
@@ -806,11 +814,16 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
             type="submit"
             size="icon"
             className="absolute right-2 bottom-2 h-8 w-8 z-10"
-            disabled={!input.trim() || isLoading}
+            disabled={!input.trim() || isLoading || hasProcessingFiles}
           >
             <Send className="h-4 w-4" />
           </Button>
         </FileAttachments>
+        {hasProcessingFiles && (
+          <p className="text-xs text-muted-foreground px-2">
+            Processing attachments...
+          </p>
+        )}
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             {isLoading && <span className="animate-pulse">Streaming…</span>}
