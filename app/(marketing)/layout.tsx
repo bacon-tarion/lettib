@@ -148,6 +148,14 @@ export default function MarketingLayout({
               height={62}
             />
           </a>
+          <a href="https://launchstag.com" target="_blank" rel="noopener">
+            <img
+              src="https://launchstag.com/badge-dark.svg"
+              alt="Featured on Launchstag"
+              width={198}
+              height={62}
+            />
+          </a>
         </div>
         <div className="border-t">
           <div className="mx-auto max-w-6xl px-4 py-4 text-xs text-muted-foreground">
