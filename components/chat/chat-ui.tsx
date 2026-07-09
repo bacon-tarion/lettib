@@ -261,7 +261,7 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
     selectedProjectId === STANDALONE_PROJECT_VALUE ||
     !selectedProjectId;
 
-  const { messages, input, handleInputChange, handleSubmit, isLoading, setMessages, setInput } =
+  const { messages, input, handleInputChange, append, isLoading, setMessages, setInput } =
     useChat({
       api: "/api/chat",
       onFinish: useCallback(
@@ -550,7 +550,7 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
     setSelectedProjectFileIds([]);
   }
 
-  function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     const hasProcessingFiles = attachedFiles.some(
       (f) => f.status === "processing"
@@ -558,23 +558,30 @@ export function ChatUI({ projects, connections }: ChatUIProps) {
     if (hasProcessingFiles) return;
     if (!input.trim() || isLoading) return;
     const fileContext = buildFileContextText(attachedFiles);
-    lastUserInputRef.current = input.trim() + fileContext;
+    const images = getImageAttachments(attachedFiles);
+    const userContent = input.trim() + fileContext;
+    lastUserInputRef.current = userContent;
     startTimeRef.current = Date.now();
-    handleSubmit(e, {
-      body: {
-        project_id: resolveProjectIdForApi(),
-        conversation_id: conversationIdRef.current,
-        provider: selectedProvider,
-        model: selectedModel,
-        tone: selectedTone,
-        web_search: webSearchEnabled,
-        file_context: fileContext || undefined,
-        images: getImageAttachments(attachedFiles),
-        project_file_ids:
-          selectedProjectFileIds.length > 0 ? selectedProjectFileIds : undefined,
-      },
-    });
+
+    setInput("");
     setAttachedFiles([]);
+
+    await append(
+      { role: "user", content: userContent },
+      {
+        body: {
+          project_id: resolveProjectIdForApi(),
+          conversation_id: conversationIdRef.current,
+          provider: selectedProvider,
+          model: selectedModel,
+          tone: selectedTone,
+          web_search: webSearchEnabled,
+          images: images.length > 0 ? images : undefined,
+          project_file_ids:
+            selectedProjectFileIds.length > 0 ? selectedProjectFileIds : undefined,
+        },
+      }
+    );
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
