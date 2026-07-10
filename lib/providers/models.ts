@@ -17,7 +17,6 @@ export const MODELS_CATALOG = {
     { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', context: 200000,  cost_in: 1.00, cost_out: 5.00 , free: false },
   ],
   google: [
-    { id: 'gemini-2.5-pro',        name: 'Gemini 2.5 Pro',        context: 1000000, cost_in: 1.25, cost_out: 10.00, free: false },
     { id: 'gemini-2.5-flash',      name: 'Gemini 2.5 Flash',      context: 1000000, cost_in: 0.30, cost_out: 2.50,  free: true  },
     { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite', context: 1000000, cost_in: 0.10, cost_out: 0.40,  free: true  },
   ],

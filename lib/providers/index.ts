@@ -104,7 +104,7 @@ export async function streamChat(input: StreamChatInput) {
       ? {
           providerOptions: {
             google: {
-              thinkingConfig: { thinkingBudget: 1024 },
+              thinkingConfig: { thinkingBudget: 0 },
             },
           },
         }
