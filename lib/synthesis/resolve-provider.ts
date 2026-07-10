@@ -1,7 +1,7 @@
 import type { LanguageModel } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createGoogleLanguageModel } from "@/lib/providers/google-v1-compat";
 import { createXai } from "@ai-sdk/xai";
 import { createGroq } from "@ai-sdk/groq";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -55,7 +55,7 @@ function buildByokModel(
     case "anthropic":
       return createAnthropic({ apiKey })(modelId);
     case "google":
-      return createGoogleGenerativeAI({ apiKey })(modelId);
+      return createGoogleLanguageModel(apiKey, modelId);
     case "xai":
       return createXai({ apiKey })(modelId);
     case "groq":

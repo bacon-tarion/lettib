@@ -1,7 +1,7 @@
 import { streamText, CoreMessage } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createGoogleLanguageModel } from "./google-v1-compat";
 import { createXai } from "@ai-sdk/xai";
 import { createGroq } from "@ai-sdk/groq";
 import { getServerGroqApiKey } from "./groq-server";
@@ -77,7 +77,7 @@ export async function streamChat(input: StreamChatInput) {
       modelInstance = createAnthropic({ apiKey })(model);
       break;
     case "google":
-      modelInstance = createGoogleGenerativeAI({ apiKey })(model);
+      modelInstance = createGoogleLanguageModel(apiKey, model);
       break;
     case "xai":
       modelInstance = createXai({ apiKey })(model);

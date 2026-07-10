@@ -1,4 +1,4 @@
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createGoogleLanguageModel } from "@/lib/providers/google-v1-compat";
 
 export const SERVER_GEMINI_MODEL = "gemini-2.0-flash";
 
@@ -18,5 +18,5 @@ export function createServerGeminiModel(model: string = SERVER_GEMINI_MODEL) {
       "Server Google API key is not configured (GOOGLE_API_KEY env var)."
     );
   }
-  return createGoogleGenerativeAI({ apiKey })(model);
+  return createGoogleLanguageModel(apiKey, model);
 }

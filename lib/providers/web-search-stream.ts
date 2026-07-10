@@ -1,5 +1,5 @@
 import { streamText, type CoreMessage } from "ai";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createGoogleLanguageModel } from "@/lib/providers/google-v1-compat";
 import { streamGroqResponse } from "@/lib/providers/groq";
 
 export type WebSearchStreamInput = {
@@ -196,9 +196,8 @@ export async function streamWebSearchChatResponse(
   }
 
   if (provider === "google") {
-    const google = createGoogleGenerativeAI({ apiKey: input.apiKey });
     const result = await streamText({
-      model: google(model),
+      model: createGoogleLanguageModel(input.apiKey, model),
       system: input.systemPrompt,
       messages: input.messages,
       providerOptions: {

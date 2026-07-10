@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createGoogleLanguageModel } from "@/lib/providers/google-v1-compat";
 import { createXai } from "@ai-sdk/xai";
 import { createGroq } from "@ai-sdk/groq";
 import { createClient } from "@/lib/supabase/server";
@@ -47,7 +47,7 @@ async function buildModel(
     case "anthropic":
       return createAnthropic({ apiKey })(model);
     case "google":
-      return createGoogleGenerativeAI({ apiKey })(model);
+      return createGoogleLanguageModel(apiKey, model);
     case "xai":
       return createXai({ apiKey })(model);
     case "groq":
