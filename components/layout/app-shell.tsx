@@ -10,15 +10,16 @@ import { cn } from "@/lib/utils";
 
 interface AppShellProps {
   userEmail?: string;
+  tier?: string;
   children: React.ReactNode;
 }
 
-export function AppShell({ userEmail, children }: AppShellProps) {
+export function AppShell({ userEmail, tier = "free", children }: AppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
     <div className="relative min-h-screen bg-background">
-      <Sidebar userEmail={userEmail} collapsed={sidebarCollapsed} />
+      <Sidebar userEmail={userEmail} tier={tier} collapsed={sidebarCollapsed} />
       <div
         className={cn(
           "flex flex-col min-h-screen transition-[margin] duration-200",

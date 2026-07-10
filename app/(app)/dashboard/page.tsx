@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { MessageSquare, GitCompare, FolderPlus, Sparkles } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { OnboardingBanner } from "@/components/onboarding/onboarding-banner";
 import { ProjectCard } from "@/components/projects/project-card";
 import { createClient } from "@/lib/supabase/server";
@@ -10,6 +11,7 @@ import { fetchRecentActivityMerged } from "@/lib/dashboard/recent-activity";
 import { getProviderLabel } from "@/lib/providers/models";
 import { fetchOnboardingStatus } from "@/lib/onboarding/queries";
 import { getUserUsageSnapshot } from "@/lib/usage/queries";
+import { getUserSubscription } from "@/lib/subscription/tier";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +55,8 @@ export default async function DashboardPage() {
     dismissed: onboardingDismissed,
   } = await fetchOnboardingStatus(user.id);
 
-  const [{ data: pinnedData }, recentActivity, snapshot, teams] = await Promise.all([
+  const [{ data: pinnedData }, recentActivity, snapshot, teams, subscription] =
+    await Promise.all([
     supabase
       .from("projects")
       .select("*")
@@ -65,7 +68,10 @@ export default async function DashboardPage() {
     fetchRecentActivityMerged(user.id, 10),
     getUserUsageSnapshot(),
     listTeams(),
+    getUserSubscription(user.id),
   ]);
+
+  const tier = subscription.tier;
 
   const teamNameById = new Map(teams.map((t) => [t.id, t.name]));
   const pinnedProjects = (pinnedData ?? []).map((p) => {
@@ -90,6 +96,30 @@ export default async function DashboardPage() {
           Here&apos;s what&apos;s happening in your workspace.
         </p>
       </div>
+
+      {tier === "free" && (
+        <Card className="border-primary/20 bg-primary/5">
+          <CardContent className="pt-6 pb-5">
+            <div className="flex items-start gap-4">
+              <div className="rounded-full bg-primary/10 p-2.5 shrink-0">
+                <Sparkles className="h-5 w-5 text-primary" />
+              </div>
+              <div className="space-y-3 min-w-0">
+                <div>
+                  <h2 className="text-base font-semibold">Unlock the full workspace</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Free is capped at 2 models per compare, 5 projects, and 7-day
+                    history. Pro removes all three for $15/mo.
+                  </p>
+                </div>
+                <Button asChild size="sm">
+                  <Link href="/settings/subscription">See plans</Link>
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {quickActions.map((a) => {

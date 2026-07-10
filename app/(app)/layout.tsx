@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/layout/app-shell";
 import { createClient } from "@/lib/supabase/server";
 import { mockUser } from "@/lib/mockData";
+import { getUserSubscription } from "@/lib/subscription/tier";
 
 export default async function AppLayout({
   children,
@@ -10,6 +11,7 @@ export default async function AppLayout({
   children: React.ReactNode;
 }) {
   let userEmail = mockUser.email;
+  let tier = "free";
 
   if (process.env.MOCK_MODE !== "true") {
     const supabase = await createClient();
@@ -21,7 +23,13 @@ export default async function AppLayout({
     // middleware is misconfigured.
     if (!user) redirect("/login");
     userEmail = user.email ?? "";
+    const subscription = await getUserSubscription(user.id);
+    tier = subscription.tier;
   }
 
-  return <AppShell userEmail={userEmail}>{children}</AppShell>;
+  return (
+    <AppShell userEmail={userEmail} tier={tier}>
+      {children}
+    </AppShell>
+  );
 }

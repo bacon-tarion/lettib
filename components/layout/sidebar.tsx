@@ -36,6 +36,12 @@ import { FeedbackButton } from "@/components/feedback/feedback-button";
 
 import { SidebarChats } from "@/components/layout/sidebar-chats";
 
+import { Badge } from "@/components/ui/badge";
+
+import { Button } from "@/components/ui/button";
+
+import { tierDisplayName } from "@/lib/subscription/tier";
+
 
 
 const navItems = [
@@ -64,6 +70,8 @@ interface SidebarProps {
 
   userEmail?: string;
 
+  tier?: string;
+
   collapsed?: boolean;
 
   onToggleCollapse?: () => void;
@@ -72,7 +80,7 @@ interface SidebarProps {
 
 
 
-export function Sidebar({ userEmail, collapsed = false }: SidebarProps) {
+export function Sidebar({ userEmail, tier = "free", collapsed = false }: SidebarProps) {
 
   const pathname = usePathname();
 
@@ -163,6 +171,25 @@ export function Sidebar({ userEmail, collapsed = false }: SidebarProps) {
           <p className="text-xs text-muted-foreground truncate pb-1">{userEmail}</p>
 
         )}
+
+        <div className="pb-2 space-y-2">
+          <Badge
+            variant="secondary"
+            className="text-[11px] font-medium bg-sidebar-accent text-sidebar-accent-foreground border-sidebar-border"
+          >
+            {tierDisplayName(tier)}
+          </Badge>
+          {tier === "free" && (
+            <div className="space-y-2">
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                Compare 2 models · 5 projects · 7-day history
+              </p>
+              <Button asChild variant="default" size="sm" className="w-full">
+                <Link href="/settings/subscription">Upgrade</Link>
+              </Button>
+            </div>
+          )}
+        </div>
 
         <FeedbackButton />
 
