@@ -344,7 +344,7 @@ export function CompareUI({
 
   const roundsRef = useRef<CompareRound[]>([]);
   const snapshotHydratedRef = useRef(false);
-  const urlHydratedRef = useRef(false);
+  const urlHydratedRef = useRef<string | null>(null);
   /**
    * Controls the in-flight /api/compare fetch. Click "Stop waiting on
    * slow models" → abort() → the SSE reader throws, the catch handler in
@@ -414,8 +414,12 @@ export function CompareUI({
   }, [projects, modelPicks, compareIdFromUrl]);
 
   useEffect(() => {
-    if (!compareIdFromUrl || urlHydratedRef.current) return;
-    urlHydratedRef.current = true;
+    if (!compareIdFromUrl) {
+      urlHydratedRef.current = null;
+      return;
+    }
+    if (urlHydratedRef.current === compareIdFromUrl) return;
+    urlHydratedRef.current = compareIdFromUrl;
     snapshotHydratedRef.current = true;
 
     void (async () => {

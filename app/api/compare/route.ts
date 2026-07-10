@@ -929,24 +929,39 @@ export async function POST(req: NextRequest) {
               },
             });
           } else {
+            const LANE_TIMEOUT_MS = 25_000;
             const abortController = new AbortController();
             const timeoutId = setTimeout(() => abortController.abort(), 120_000);
+            let laneRaceTimer: ReturnType<typeof setTimeout> | undefined;
             try {
-              const result = await streamChat({
-                provider: spec.provider as
-                  | "openai"
-                  | "anthropic"
-                  | "google"
-                  | "xai"
-                  | "custom",
-                model: spec.model,
-                apiKey,
-                baseUrl: baseUrl ?? undefined,
-                messages: [{ role: "user", content: laneUserContent }],
-                systemPrompt: laneSystemPrompt || undefined,
-                abortSignal: abortController.signal,
-                maxTokens: 4096,
-              });
+              const result = await Promise.race([
+                streamChat({
+                  provider: spec.provider as
+                    | "openai"
+                    | "anthropic"
+                    | "google"
+                    | "xai"
+                    | "custom",
+                  model: spec.model,
+                  apiKey,
+                  baseUrl: baseUrl ?? undefined,
+                  messages: [{ role: "user", content: laneUserContent }],
+                  systemPrompt: laneSystemPrompt || undefined,
+                  abortSignal: abortController.signal,
+                  maxTokens: 4096,
+                }),
+                new Promise<never>((_, reject) => {
+                  laneRaceTimer = setTimeout(
+                    () =>
+                      reject(
+                        new Error(
+                          "Lane timed out after 25s. The model took too long to respond."
+                        )
+                      ),
+                    LANE_TIMEOUT_MS
+                  );
+                }),
+              ]);
 
               for await (const chunk of result.textStream) {
                 accumulated += chunk;
@@ -967,6 +982,7 @@ export async function POST(req: NextRequest) {
               tokensOut = usage?.completionTokens ?? 0;
             } finally {
               clearTimeout(timeoutId);
+              clearTimeout(laneRaceTimer);
             }
           }
           const latency_ms = Date.now() - startedAt;
