@@ -432,37 +432,75 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const result = await streamChat({
-      provider,
-      model,
-      apiKey: trimmedKey,
-      baseUrl:
-        (connection as { custom_base_url: string | null }).custom_base_url ??
-        undefined,
-      messages,
-      systemPrompt: systemPrompt || undefined,
-      onFinish: ({ usage }) => {
-        logUsageAsync(serviceClient, {
-          userId: user.id,
-          conversationId,
-          action: "chat",
-          provider,
-          model,
-          tokensIn: usage?.promptTokens,
-          tokensOut: usage?.completionTokens,
-          latencyMs: Date.now() - startedAt,
-        });
-      },
-    });
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), 120_000);
+    try {
+      const result = await streamChat({
+        provider,
+        model,
+        apiKey: trimmedKey,
+        baseUrl:
+          (connection as { custom_base_url: string | null }).custom_base_url ??
+          undefined,
+        messages,
+        systemPrompt: systemPrompt || undefined,
+        abortSignal: abortController.signal,
+        maxTokens: 4096,
+        onFinish: ({ usage }) => {
+          logUsageAsync(serviceClient, {
+            userId: user.id,
+            conversationId,
+            action: "chat",
+            provider,
+            model,
+            tokensIn: usage?.promptTokens,
+            tokensOut: usage?.completionTokens,
+            latencyMs: Date.now() - startedAt,
+          });
+        },
+      });
 
-    return result.toDataStreamResponse({
-      headers: {
-        "X-Conversation-Id": conversationId || "",
-        "X-Project-Id": projectId || "",
-        "X-Provider": provider,
-        "X-Model": model,
-      },
-    });
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          try {
+            let accumulated = "";
+            for await (const chunk of result.textStream) {
+              accumulated += chunk;
+              controller.enqueue(
+                encoder.encode(`0:${JSON.stringify(chunk)}\n`)
+              );
+            }
+
+            const finishReason = await result.finishReason;
+            if (accumulated.trim().length === 0) {
+              throw new Error(
+                `Model returned no content (finishReason: ${finishReason}). ` +
+                  `This usually means the response was blocked or the token budget was ` +
+                  `consumed by reasoning.`
+              );
+            }
+
+            controller.enqueue(
+              encoder.encode(`d:${JSON.stringify({ finishReason })}\n`)
+            );
+            controller.close();
+          } catch (err) {
+            controller.error(err);
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "X-Vercel-AI-Data-Stream": "v1",
+          ...streamHeaders,
+        },
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
   } catch (err: unknown) {
     // Don't echo raw provider error messages (may include sensitive payloads
     // or stack details). Log server-side, return generic message to the client.

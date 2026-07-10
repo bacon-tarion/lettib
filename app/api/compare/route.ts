@@ -929,28 +929,45 @@ export async function POST(req: NextRequest) {
               },
             });
           } else {
-            const result = await streamChat({
-              provider: spec.provider as
-                | "openai"
-                | "anthropic"
-                | "google"
-                | "xai"
-                | "custom",
-              model: spec.model,
-              apiKey,
-              baseUrl: baseUrl ?? undefined,
-              messages: [{ role: "user", content: laneUserContent }],
-              systemPrompt: laneSystemPrompt || undefined,
-            });
+            const abortController = new AbortController();
+            const timeoutId = setTimeout(() => abortController.abort(), 120_000);
+            try {
+              const result = await streamChat({
+                provider: spec.provider as
+                  | "openai"
+                  | "anthropic"
+                  | "google"
+                  | "xai"
+                  | "custom",
+                model: spec.model,
+                apiKey,
+                baseUrl: baseUrl ?? undefined,
+                messages: [{ role: "user", content: laneUserContent }],
+                systemPrompt: laneSystemPrompt || undefined,
+                abortSignal: abortController.signal,
+                maxTokens: 4096,
+              });
 
-            for await (const chunk of result.textStream) {
-              accumulated += chunk;
-              enqueue({ type: "chunk", key, text: chunk });
+              for await (const chunk of result.textStream) {
+                accumulated += chunk;
+                enqueue({ type: "chunk", key, text: chunk });
+              }
+
+              const finishReason = await result.finishReason;
+              if (accumulated.trim().length === 0) {
+                throw new Error(
+                  `Model returned no content (finishReason: ${finishReason}). ` +
+                    `This usually means the response was blocked or the token budget was ` +
+                    `consumed by reasoning.`
+                );
+              }
+
+              const usage = await result.usage;
+              tokensIn = usage?.promptTokens ?? 0;
+              tokensOut = usage?.completionTokens ?? 0;
+            } finally {
+              clearTimeout(timeoutId);
             }
-
-            const usage = await result.usage;
-            tokensIn = usage?.promptTokens ?? 0;
-            tokensOut = usage?.completionTokens ?? 0;
           }
           const latency_ms = Date.now() - startedAt;
           const cost_usd = calcCompareModelCost(

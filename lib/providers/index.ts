@@ -35,6 +35,8 @@ export type StreamChatInput = {
   messages: CoreMessage[];
   systemPrompt?: string;
   onFinish?: Parameters<typeof streamText>[0]["onFinish"];
+  abortSignal?: AbortSignal;
+  maxTokens?: number;
 };
 
 /**
@@ -52,8 +54,17 @@ export function getServerApiKey(provider: string): string | null {
 }
 
 export async function streamChat(input: StreamChatInput) {
-  const { provider, model, apiKey, baseUrl, messages, systemPrompt, onFinish } =
-    input;
+  const {
+    provider,
+    model,
+    apiKey,
+    baseUrl,
+    messages,
+    systemPrompt,
+    onFinish,
+    abortSignal,
+    maxTokens = 4096,
+  } = input;
 
   type ModelInstance = Parameters<typeof streamText>[0]["model"];
   let modelInstance: ModelInstance;
@@ -87,5 +98,16 @@ export async function streamChat(input: StreamChatInput) {
     system: systemPrompt,
     messages,
     onFinish,
+    abortSignal,
+    maxTokens,
+    ...(provider === "google"
+      ? {
+          providerOptions: {
+            google: {
+              thinkingConfig: { thinkingBudget: 1024 },
+            },
+          },
+        }
+      : {}),
   });
 }
